@@ -294,9 +294,65 @@ class BoltzmannTransportCalculator:
 register_calculator(BoltzmannTransportCalculator.name, BoltzmannTransportCalculator)
 
 
+def _prepare_temperature_array(temperature: float | npt.ArrayLike) -> npt.NDArray[np.float64]:
+    """Validate and normalize temperature input to a 1-D array."""
+    temp_input = np.asarray(temperature, dtype=np.float64)
+    temperatures = np.array([float(temp_input)], dtype=np.float64) if temp_input.ndim == 0 else np.ravel(temp_input)
+    if temperatures.size == 0:
+        raise ValueError("temperature array must not be empty")
+    if np.any(temperatures <= 0.0):
+        raise ValueError("temperature must be positive")
+    return temperatures
+
+
+def _prepare_mu_shifts(chemical_potential: float | npt.ArrayLike | None) -> npt.NDArray[np.float64]:
+    """Validate and normalize chemical potential input to a 1-D array."""
+    mu_input = np.asarray(chemical_potential, dtype=np.float64)
+    mu_shifts = np.array([float(mu_input)], dtype=np.float64) if mu_input.ndim == 0 else np.ravel(mu_input)
+    if mu_shifts.size == 0:
+        raise ValueError("chemical_potential array must not be empty")
+    return mu_shifts
+
+
+def _compute_mu_scan(
+    calc: BoltzmannTransportCalculator,
+    fermi: float,
+    mu_shifts: npt.NDArray[np.float64],
+    temperatures: npt.NDArray[np.float64],
+    kpoint_mesh: tuple[int, int, int],
+    chunk_size: int,
+    metadata: dict[str, Any],
+) -> dict[float | str, Any]:
+    """Sweep chemical potentials and temperatures, returning nested dict."""
+    results: dict[float | str, Any] = {}
+    for dmu in mu_shifts:
+        mu_abs = fermi + float(dmu)
+        mu_key = float(dmu)
+        t_dict: dict[float, dict[str, Any]] = {}
+        for temp in temperatures:
+            sigma, seebeck, kappa, _, _, _ = calc.calculate_transport(
+                mu_abs,
+                float(temp),
+                kpoint_mesh,
+                kchunk=chunk_size,
+            )
+            t_dict[float(temp)] = {
+                "sigma": sigma,
+                "sigma_avg": tensor_average(sigma),
+                "seebeck": seebeck,
+                "seebeck_avg": tensor_average(seebeck),
+                "kappa": kappa,
+                "kappa_avg": tensor_average(kappa),
+            }
+        results[mu_key] = t_dict
+    results["meta"] = metadata
+    return results
+
+
 def calculate_spin_polarized_transport(
     filepath: str | Path,
     temperature: float | npt.ArrayLike = 300.0,
+    chemical_potential: float | npt.ArrayLike | None = None,
     tau: float = 1e-14,
     kpoint_mesh: tuple[int, int, int] = (20, 20, 20),
     lr_ratio: int = 5,
@@ -311,12 +367,18 @@ def calculate_spin_polarized_transport(
     low_temp_energy_step: float = 1e-3,
     parser: str | ElectronicStructureParser = DEFAULT_PARSER,
     calculator: str = "boltzmann",
-) -> dict[str, Any]:
+) -> dict[str, Any] | dict[float | str, Any]:
     """Run full parser -> interpolation -> transport workflow.
 
     Args:
         filepath: Path to electronic-structure file.
         temperature: Temperature in kelvin, scalar or array-like.
+        chemical_potential: Chemical potential shift(s) relative to the Fermi
+            level in eV.  Accepts a scalar or array-like.  When provided the
+            result is a nested dictionary keyed by chemical potential and
+            temperature values:
+            ``{mu: {T: {"sigma": ..., "seebeck": ..., "kappa": ..., ...}}}``.
+            When *None* (the default) the original flat-dict format is returned.
         tau: Constant relaxation time in seconds.
         kpoint_mesh: Integration mesh dimensions.
         lr_ratio: Interpolator star-vector ratio.
@@ -333,9 +395,16 @@ def calculate_spin_polarized_transport(
         calculator: Registered calculator name.
 
     Returns:
-        Dictionary with tensors and metadata in a uniform shape contract:
-        ``temperature`` has shape ``(nT,)``, ``sigma``/``seebeck``/``kappa`` have
-        shape ``(nT, 3, 3)``, and ``*_avg`` have shape ``(nT,)``.
+        When *chemical_potential* is *None*: dictionary with tensors and metadata
+        in a uniform shape contract (``temperature`` has shape ``(nT,)``,
+        ``sigma``/``seebeck``/``kappa`` have shape ``(nT, 3, 3)``, and ``*_avg``
+        have shape ``(nT,)``).
+
+        When *chemical_potential* is given: nested dictionary
+        ``{mu: {T: {"sigma": 3x3, "seebeck": 3x3, "kappa": 3x3,
+        "sigma_avg": float, "seebeck_avg": float, "kappa_avg": float}}}``
+        with an extra ``"meta"`` key containing Fermi energy, jspins, parser and
+        calculator info.
 
     Raises:
         ValueError: If requested band window does not include any bands.
@@ -396,10 +465,17 @@ def calculate_spin_polarized_transport(
     if np.any(temperatures <= 0.0):
         raise ValueError("temperature must be positive")
 
+    # --- chemical potential grid -------------------------------------------
+    use_mu_scan = chemical_potential is not None
+    mu_shifts = _prepare_mu_shifts(chemical_potential) if use_mu_scan else np.array([0.0], dtype=np.float64)
+
     print(
         f"Transport (mesh={kpoint_mesh}, T={temperature} K, tau={tau:.1e} s, "
         f"chunk={chunk_size}, calculator='{calculator}')..."
     )
+    if use_mu_scan:
+        print(f"  Chemical potential shifts: {mu_shifts} eV relative to E_Fermi={fermi:.4f} eV")
+
     calc = calculator_cls(
         interp,
         tau=tau,
@@ -412,6 +488,18 @@ def calculate_spin_polarized_transport(
         low_temp_energy_window=low_temp_energy_window,
         low_temp_energy_step=low_temp_energy_step,
     )
+
+    metadata = {
+        "fermi_energy": fermi,
+        "jspins": parsed.jspins,
+        "parser": parser_obj.name,
+        "calculator": calculator,
+    }
+
+    if use_mu_scan:
+        return _compute_mu_scan(calc, fermi, mu_shifts, temperatures, kpoint_mesh, chunk_size, metadata)
+
+    # --- original flat-dict path (no chemical_potential) -------------------
     sigma_all = np.empty((temperatures.size, 3, 3), dtype=np.float64)
     seebeck_all = np.empty((temperatures.size, 3, 3), dtype=np.float64)
     kappa_all = np.empty((temperatures.size, 3, 3), dtype=np.float64)
@@ -427,13 +515,6 @@ def calculate_spin_polarized_transport(
         sigma_avg_all[it] = tensor_average(sigma)
         seebeck_avg_all[it] = tensor_average(seebeck)
         kappa_avg_all[it] = tensor_average(kappa)
-
-    metadata = {
-        "fermi_energy": fermi,
-        "jspins": parsed.jspins,
-        "parser": parser_obj.name,
-        "calculator": calculator,
-    }
 
     results = {
         "temperature": temperatures,
