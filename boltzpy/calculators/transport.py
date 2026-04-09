@@ -15,6 +15,16 @@ from boltzpy.mesh import TetrahedronMesh
 from boltzpy.parsers import DEFAULT_PARSER, ElectronicStructureParser, get_parser
 
 
+def _validate_bound_parameter(name: str, value: float, *, allow_zero: bool = False) -> None:
+    """Validate numeric parameter bounds for transport configuration."""
+    if allow_zero:
+        if value < 0.0:
+            raise ValueError(f"{name} must be non-negative")
+        return
+    if value <= 0.0:
+        raise ValueError(f"{name} must be positive")
+
+
 class BoltzmannTransportCalculator:
     """Evaluate electrical and thermal transport tensors from an interpolator."""
 
@@ -52,20 +62,13 @@ class BoltzmannTransportCalculator:
         self.tau = tau
         self.chunk_size = chunk_size
         self.tetra_mesh: TetrahedronMesh | None = None
-        if energy_window_kbt_factor <= 0.0:
-            raise ValueError("energy_window_kbt_factor must be positive")
-        if min_energy_window <= 0.0:
-            raise ValueError("min_energy_window must be positive")
-        if energy_step_kbt_divisor <= 0.0:
-            raise ValueError("energy_step_kbt_divisor must be positive")
-        if min_energy_step <= 0.0:
-            raise ValueError("min_energy_step must be positive")
-        if low_temp_kbt_threshold < 0.0:
-            raise ValueError("low_temp_kbt_threshold must be non-negative")
-        if low_temp_energy_window <= 0.0:
-            raise ValueError("low_temp_energy_window must be positive")
-        if low_temp_energy_step <= 0.0:
-            raise ValueError("low_temp_energy_step must be positive")
+        _validate_bound_parameter("energy_window_kbt_factor", energy_window_kbt_factor)
+        _validate_bound_parameter("min_energy_window", min_energy_window)
+        _validate_bound_parameter("energy_step_kbt_divisor", energy_step_kbt_divisor)
+        _validate_bound_parameter("min_energy_step", min_energy_step)
+        _validate_bound_parameter("low_temp_kbt_threshold", low_temp_kbt_threshold, allow_zero=True)
+        _validate_bound_parameter("low_temp_energy_window", low_temp_energy_window)
+        _validate_bound_parameter("low_temp_energy_step", low_temp_energy_step)
         self.energy_window_kbt_factor = energy_window_kbt_factor
         self.min_energy_window = min_energy_window
         self.energy_step_kbt_divisor = energy_step_kbt_divisor
@@ -347,11 +350,12 @@ def calculate_spin_polarized_transport(
     fermi = parsed.fermi_energy
     eigenvalues = parsed.eigenvalues
 
-    print(f"Parsing {Path(filepath).name} with parser '{parser_obj.name}'...")
-    print(f"  jspins={parsed.jspins}, nk={parsed.nk}, nbands={parsed.nbands}")
-    print(f"  E_Fermi = {fermi:.4f} eV")
-    print(f"  det(A) = {np.linalg.det(parsed.lattice):.2f} A^3")
-    print(f"  symops = {len(parsed.symops)}")
+    # for debugging
+    # print(f"Parsing {Path(filepath).name} with parser '{parser_obj.name}'...")
+    # print(f"  jspins={parsed.jspins}, nk={parsed.nk}, nbands={parsed.nbands}")
+    # print(f"  E_Fermi = {fermi:.4f} eV")
+    # print(f"  det(A) = {np.linalg.det(parsed.lattice):.2f} A^3")
+    # print(f"  symops = {len(parsed.symops)}")
 
     if band_window is not None:
         emin, emax = band_window
