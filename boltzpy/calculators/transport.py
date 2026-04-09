@@ -1,13 +1,11 @@
 """Boltzmann transport calculators and high-level orchestration entry point."""
 
-import math
 import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-import scipy.constants as sc
 
 from boltzpy.calculators.base import get_calculator, register_calculator, tensor_average
 from boltzpy.core.constants import E_CHARGE, KB_EV, TWO_PI
@@ -295,7 +293,7 @@ register_calculator(BoltzmannTransportCalculator.name, BoltzmannTransportCalcula
 
 def calculate_spin_polarized_transport(
     filepath: str | Path,
-    temperature: float = 300.0,
+    temperature: float | npt.ArrayLike = 300.0,
     tau: float = 1e-14,
     kpoint_mesh: tuple[int, int, int] = (20, 20, 20),
     lr_ratio: int = 5,
@@ -315,7 +313,7 @@ def calculate_spin_polarized_transport(
 
     Args:
         filepath: Path to electronic-structure file.
-        temperature: Temperature in kelvin.
+        temperature: Temperature in kelvin, scalar or array-like.
         tau: Constant relaxation time in seconds.
         kpoint_mesh: Integration mesh dimensions.
         lr_ratio: Interpolator star-vector ratio.
@@ -332,7 +330,9 @@ def calculate_spin_polarized_transport(
         calculator: Registered calculator name.
 
     Returns:
-        Dictionary with tensors and metadata.
+        Dictionary with tensors and metadata in a uniform shape contract:
+        ``temperature`` has shape ``(nT,)``, ``sigma``/``seebeck``/``kappa`` have
+        shape ``(nT, 3, 3)``, and ``*_avg`` have shape ``(nT,)``.
 
     Raises:
         ValueError: If requested band window does not include any bands.
@@ -343,7 +343,6 @@ def calculate_spin_polarized_transport(
     calculator_cls = get_calculator(calculator)
 
     filepath = str(filepath)
-    t0 = time.time()
     parsed = parser_obj.parse(filepath)
     fermi = parsed.fermi_energy
     eigenvalues = parsed.eigenvalues
@@ -385,6 +384,14 @@ def calculate_spin_polarized_transport(
     print(f"  MAE = {interp.mae:.6f} eV")
     print(f"  NR = {interp.nr}, NPG = {interp._npg}, dt = {time.time() - t_skw:.2f} s")
 
+    temp_input = np.asarray(temperature, dtype=np.float64)
+    is_scalar_temp = temp_input.ndim == 0
+    temperatures = np.array([float(temp_input)], dtype=np.float64) if is_scalar_temp else np.ravel(temp_input)
+    if temperatures.size == 0:
+        raise ValueError("temperature array must not be empty")
+    if np.any(temperatures <= 0.0):
+        raise ValueError("temperature must be positive")
+
     print(
         f"Transport (mesh={kpoint_mesh}, T={temperature} K, tau={tau:.1e} s, "
         f"chunk={chunk_size}, calculator='{calculator}')..."
@@ -401,55 +408,38 @@ def calculate_spin_polarized_transport(
         low_temp_energy_window=low_temp_energy_window,
         low_temp_energy_step=low_temp_energy_step,
     )
-    sigma, seebeck, kappa, _, _, _ = calc.calculate_transport(fermi, temperature, kpoint_mesh, kchunk=chunk_size)
+    sigma_all = np.empty((temperatures.size, 3, 3), dtype=np.float64)
+    seebeck_all = np.empty((temperatures.size, 3, 3), dtype=np.float64)
+    kappa_all = np.empty((temperatures.size, 3, 3), dtype=np.float64)
+    sigma_avg_all = np.empty(temperatures.size, dtype=np.float64)
+    seebeck_avg_all = np.empty(temperatures.size, dtype=np.float64)
+    kappa_avg_all = np.empty(temperatures.size, dtype=np.float64)
 
-    results = {
-        "sigma": sigma,
-        "seebeck": seebeck,
-        "kappa": kappa,
+    for it, temp in enumerate(temperatures):
+        sigma, seebeck, kappa, _, _, _ = calc.calculate_transport(fermi, float(temp), kpoint_mesh, kchunk=chunk_size)
+        sigma_all[it] = sigma
+        seebeck_all[it] = seebeck
+        kappa_all[it] = kappa
+        sigma_avg_all[it] = tensor_average(sigma)
+        seebeck_avg_all[it] = tensor_average(seebeck)
+        kappa_avg_all[it] = tensor_average(kappa)
+
+    metadata = {
         "fermi_energy": fermi,
         "jspins": parsed.jspins,
         "parser": parser_obj.name,
         "calculator": calculator,
     }
 
-    sigma_avg = tensor_average(sigma)
-    seebeck_avg = tensor_average(seebeck)
-    kappa_avg = tensor_average(kappa)
-
-    print(f"\n{'=' * 60}")
-    print(f"RESULTS ({Path(filepath).name})")
-    print(f"{'=' * 60}")
-    print(f"  T = {temperature} K, tau = {tau:.1e} s, jspins = {parsed.jspins}")
-    print(f"  E_Fermi = {fermi:.4f} eV")
-
-    print(f"\n  sigma_avg = {sigma_avg:.4e} S/m")
-    print(f"  sigma/tau = {sigma_avg / tau:.4e} 1/(Ohm*m*s)")
-    print("  sigma tensor (S/m):")
-    for row in sigma:
-        print(f"    [{row[0]:12.4e} {row[1]:12.4e} {row[2]:12.4e}]")
-
-    print(f"\n  seebeck_avg = {seebeck_avg * 1e6:.2f} uV/K")
-    print("  seebeck tensor (uV/K):")
-    for row in seebeck:
-        print(f"    [{row[0] * 1e6:10.2f} {row[1] * 1e6:10.2f} {row[2] * 1e6:10.2f}]")
-
-    print(f"\n  kappa_avg = {kappa_avg:.4f} W/(m*K)")
-    print("  kappa tensor (W/(m*K)):")
-    for row in kappa:
-        print(f"    [{row[0]:12.4f} {row[1]:12.4f} {row[2]:12.4f}]")
-
-    if sigma_avg > 0.0:
-        lorenz = kappa_avg / (sigma_avg * temperature)
-        l0_wf = math.pi * math.pi / 3.0 * (sc.Boltzmann / sc.e) ** 2
-        print(f"\n  Lorenz number = {lorenz:.4e} V^2/K^2")
-        print(f"  Wiedemann-Franz L0 = {l0_wf:.4e} V^2/K^2")
-        print(f"  L/L0 = {lorenz / l0_wf:.4f}")
-
-    power_factor = seebeck_avg * seebeck_avg * sigma_avg
-    print(f"\n  Power factor = {power_factor * 1e3:.4f} mW/(m*K^2)")
-    print(f"  Power factor/tau = {power_factor / tau * 1e3:.4f} mW/(m*K^2*s)")
-    print(f"\n  Total runtime = {time.time() - t0:.1f} s")
-    print(f"{'=' * 60}\n")
+    results = {
+        "temperature": temperatures,
+        "sigma": sigma_all,
+        "sigma_avg": sigma_avg_all,
+        "seebeck": seebeck_all,
+        "seebeck_avg": seebeck_avg_all,
+        "kappa": kappa_all,
+        "kappa_avg": kappa_avg_all,
+        **metadata,
+    }
 
     return results
