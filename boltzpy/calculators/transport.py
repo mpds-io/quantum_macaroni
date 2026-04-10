@@ -290,6 +290,143 @@ class BoltzmannTransportCalculator:
         power_factor = seebeck_avg * seebeck_avg * sigma_avg
         return power_factor * temperature / (kappa_el_avg + lattice_thermal_conductivity)
 
+    def _build_unified_energy_grid(
+        self,
+        mu_values: npt.NDArray[np.float64],
+        temperatures: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
+        """Build a single energy grid covering all (mu, T) combinations.
+
+        The grid is fine enough for the tightest thermal resolution (lowest T)
+        and wide enough for the broadest window (highest T) shifted to every
+        chemical potential value.
+        """
+        kbts = KB_EV * temperatures
+        normal_mask = kbts > self.low_temp_kbt_threshold
+
+        if np.any(normal_mask):
+            normal_kbts = kbts[normal_mask]
+            max_window = max(
+                float(np.max(self.energy_window_kbt_factor * normal_kbts)),
+                self.min_energy_window,
+            )
+            min_de = max(
+                float(np.min(normal_kbts / self.energy_step_kbt_divisor)),
+                self.min_energy_step,
+            )
+        else:
+            max_window = self.low_temp_energy_window
+            min_de = self.low_temp_energy_step
+
+        if np.any(~normal_mask):
+            max_window = max(max_window, self.low_temp_energy_window)
+            min_de = min(min_de, self.low_temp_energy_step)
+
+        e_lo = float(np.min(mu_values)) - max_window
+        e_hi = float(np.max(mu_values)) + max_window
+
+        ne = int((e_hi - e_lo) / min_de) + 1
+        return np.linspace(e_lo, e_hi, ne, dtype=np.float64)
+
+    def calculate_transport_scan(
+        self,
+        mu_values: npt.NDArray[np.float64],
+        temperatures: npt.NDArray[np.float64],
+        kpoint_mesh: tuple[int, int, int],
+        kchunk: int | None = None,
+    ) -> dict[str, Any]:
+        """Compute transport tensors for all (mu, T) pairs efficiently.
+
+        Interpolation and transport DOS are computed **once**; only the cheap
+        Onsager integration is repeated per (mu, T) pair.
+
+        Args:
+            mu_values: Absolute chemical potential values in eV (not shifts).
+            temperatures: Temperature array in kelvin.
+            kpoint_mesh: Integration mesh dimensions.
+            kchunk: Optional chunk size override.
+
+        Returns:
+            Dictionary with keys ``"sigma"``, ``"seebeck"``, ``"kappa"``
+            (shape ``(n_mu, n_T, 3, 3)``) and ``"*_avg"`` (shape ``(n_mu, n_T)``).
+
+        """
+        if kchunk is None:
+            kchunk = self.chunk_size
+
+        self._ensure_tetra_mesh(kpoint_mesh)
+        mesh = self.tetra_mesh
+        if mesh is None:
+            raise RuntimeError("tetrahedron mesh was not initialized")
+
+        e_grid = self._build_unified_energy_grid(mu_values, temperatures)
+
+        # compute TDOS once for all spins
+        tdos_total = np.zeros((e_grid.shape[0], 9), dtype=np.float64)
+        for spin in range(self.interp.nspin):
+            e_all, vel_all = self.interp.eval_energy_velocity(
+                mesh.full_kpoints,
+                spin,
+                kchunk,
+            )
+            tdos_total += nb_transport_dos_flat(
+                e_all,
+                vel_all,
+                mesh.tetrahedra,
+                self.tau,
+                e_grid,
+            )
+
+        if self.interp.nspin == 1:
+            tdos_total *= 2.0
+
+        norm = mesh.tetra_vol / (TWO_PI**3) * 1e30
+
+        n_mu = mu_values.shape[0]
+        n_t = temperatures.shape[0]
+        sigma_all = np.empty((n_mu, n_t, 3, 3), dtype=np.float64)
+        seebeck_all = np.empty((n_mu, n_t, 3, 3), dtype=np.float64)
+        kappa_all = np.empty((n_mu, n_t, 3, 3), dtype=np.float64)
+        sigma_avg = np.empty((n_mu, n_t), dtype=np.float64)
+        seebeck_avg = np.empty((n_mu, n_t), dtype=np.float64)
+        kappa_avg = np.empty((n_mu, n_t), dtype=np.float64)
+
+        for imu in range(n_mu):
+            mu = float(mu_values[imu])
+            for it in range(n_t):
+                temp = float(temperatures[it])
+                kbt = KB_EV * temp
+
+                l0, l1, l2 = nb_onsager_from_tdos_flat(tdos_total, e_grid, mu, kbt)
+                l0 = l0 * norm
+                l1 = l1 * norm
+                l2 = l2 * norm
+
+                l0_mat = l0.reshape(3, 3)
+                l1_mat = l1.reshape(3, 3)
+                l2_mat = l2.reshape(3, 3)
+
+                l0_inv = np.linalg.inv(l0_mat)
+                sig = E_CHARGE * l0_mat
+                see = -(l1_mat @ l0_inv) / temp
+                kap = (E_CHARGE / temp) * (l2_mat - l1_mat @ l0_inv @ l1_mat)
+
+                sigma_all[imu, it] = sig
+                seebeck_all[imu, it] = see
+                kappa_all[imu, it] = kap
+                sigma_avg[imu, it] = tensor_average(sig)
+                seebeck_avg[imu, it] = tensor_average(see)
+                kappa_avg[imu, it] = tensor_average(kap)
+
+        return {
+            "sigma": sigma_all,
+            "sigma_avg": sigma_avg,
+            "seebeck": seebeck_all,
+            "seebeck_avg": seebeck_avg,
+            "kappa": kappa_all,
+            "kappa_avg": kappa_avg,
+        }
+
 
 register_calculator(BoltzmannTransportCalculator.name, BoltzmannTransportCalculator)
 
@@ -324,25 +461,21 @@ def _compute_mu_scan(
     metadata: dict[str, Any],
 ) -> dict[float | str, Any]:
     """Sweep chemical potentials and temperatures, returning nested dict."""
+    mu_abs = fermi + mu_shifts
+    scan = calc.calculate_transport_scan(mu_abs, temperatures, kpoint_mesh, kchunk=chunk_size)
+
     results: dict[float | str, Any] = {}
-    for dmu in mu_shifts:
-        mu_abs = fermi + float(dmu)
+    for imu, dmu in enumerate(mu_shifts):
         mu_key = float(dmu)
         t_dict: dict[float, dict[str, Any]] = {}
-        for temp in temperatures:
-            sigma, seebeck, kappa, _, _, _ = calc.calculate_transport(
-                mu_abs,
-                float(temp),
-                kpoint_mesh,
-                kchunk=chunk_size,
-            )
+        for it, temp in enumerate(temperatures):
             t_dict[float(temp)] = {
-                "sigma": sigma,
-                "sigma_avg": tensor_average(sigma),
-                "seebeck": seebeck,
-                "seebeck_avg": tensor_average(seebeck),
-                "kappa": kappa,
-                "kappa_avg": tensor_average(kappa),
+                "sigma": scan["sigma"][imu, it],
+                "sigma_avg": float(scan["sigma_avg"][imu, it]),
+                "seebeck": scan["seebeck"][imu, it],
+                "seebeck_avg": float(scan["seebeck_avg"][imu, it]),
+                "kappa": scan["kappa"][imu, it],
+                "kappa_avg": float(scan["kappa_avg"][imu, it]),
             }
         results[mu_key] = t_dict
     results["meta"] = metadata
@@ -499,31 +632,17 @@ def calculate_spin_polarized_transport(
     if use_mu_scan:
         return _compute_mu_scan(calc, fermi, mu_shifts, temperatures, kpoint_mesh, chunk_size, metadata)
 
-    # --- original flat-dict path (no chemical_potential) -------------------
-    sigma_all = np.empty((temperatures.size, 3, 3), dtype=np.float64)
-    seebeck_all = np.empty((temperatures.size, 3, 3), dtype=np.float64)
-    kappa_all = np.empty((temperatures.size, 3, 3), dtype=np.float64)
-    sigma_avg_all = np.empty(temperatures.size, dtype=np.float64)
-    seebeck_avg_all = np.empty(temperatures.size, dtype=np.float64)
-    kappa_avg_all = np.empty(temperatures.size, dtype=np.float64)
-
-    for it, temp in enumerate(temperatures):
-        sigma, seebeck, kappa, _, _, _ = calc.calculate_transport(fermi, float(temp), kpoint_mesh, kchunk=chunk_size)
-        sigma_all[it] = sigma
-        seebeck_all[it] = seebeck
-        kappa_all[it] = kappa
-        sigma_avg_all[it] = tensor_average(sigma)
-        seebeck_avg_all[it] = tensor_average(seebeck)
-        kappa_avg_all[it] = tensor_average(kappa)
+    fermi_arr = np.array([fermi], dtype=np.float64)
+    scan = calc.calculate_transport_scan(fermi_arr, temperatures, kpoint_mesh, kchunk=chunk_size)
 
     results = {
         "temperature": temperatures,
-        "sigma": sigma_all,
-        "sigma_avg": sigma_avg_all,
-        "seebeck": seebeck_all,
-        "seebeck_avg": seebeck_avg_all,
-        "kappa": kappa_all,
-        "kappa_avg": kappa_avg_all,
+        "sigma": scan["sigma"][0],
+        "sigma_avg": scan["sigma_avg"][0],
+        "seebeck": scan["seebeck"][0],
+        "seebeck_avg": scan["seebeck_avg"][0],
+        "kappa": scan["kappa"][0],
+        "kappa_avg": scan["kappa_avg"][0],
         **metadata,
     }
 
