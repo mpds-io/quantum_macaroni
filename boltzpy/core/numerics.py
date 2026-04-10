@@ -193,8 +193,8 @@ def nb_transport_dos_flat(  # noqa: C901, PLR0912
                     acc[ie, 8] += dw_tau * va2 * va2
 
     tdos = np.zeros((ne, 9), dtype=np.float64)
-    for ib in range(nbands):
-        for ie in range(ne):
+    for ie in _nb.prange(ne):  # ty:ignore[not-iterable]
+        for ib in range(nbands):
             for ab in range(9):
                 tdos[ie, ab] += tdos_bands[ib, ie, ab]
 
