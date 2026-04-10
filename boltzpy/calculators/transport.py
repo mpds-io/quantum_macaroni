@@ -654,14 +654,14 @@ def calculate_spin_polarized_transport(
     scan = calc.calculate_transport_scan(fermi_arr, temperatures, kpoint_mesh, kchunk=chunk_size)
 
     results = {
-        "temperature": temperatures,
-        "sigma": scan["sigma"][0],
-        "sigma_avg": scan["sigma_avg"][0],
-        "seebeck": scan["seebeck"][0],
-        "seebeck_avg": scan["seebeck_avg"][0],
-        "kappa": scan["kappa"][0],
-        "kappa_avg": scan["kappa_avg"][0],
-        "units": _transport_result_units(),
+        "temperature": temperatures,  # Temperature grid in K, shape: (nT,)
+        "sigma": scan["sigma"][0],  # Electrical conductivity tensor, shape: (nT, 3, 3)
+        "sigma_avg": scan["sigma_avg"][0],  # Isotropic conductivity average, shape: (nT,)
+        "seebeck": scan["seebeck"][0],  # Seebeck tensor, shape: (nT, 3, 3)
+        "seebeck_avg": scan["seebeck_avg"][0],  # Isotropic Seebeck average, shape: (nT,)
+        "kappa": scan["kappa"][0],  # Electronic thermal conductivity tensor, shape: (nT, 3, 3)
+        "kappa_avg": scan["kappa_avg"][0],  # Isotropic thermal conductivity average, shape: (nT,)
+        "units": _transport_result_units(),  # Unit map for transport outputs
         **metadata,
     }
 
