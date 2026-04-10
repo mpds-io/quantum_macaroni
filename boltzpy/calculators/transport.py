@@ -398,9 +398,9 @@ class BoltzmannTransportCalculator:
                 kbt = KB_EV * temp
 
                 l0, l1, l2 = nb_onsager_from_tdos_flat(tdos_total, e_grid, mu, kbt)
-                l0 = l0 * norm
-                l1 = l1 * norm
-                l2 = l2 * norm
+                l0 *= norm
+                l1 *= norm
+                l2 *= norm
 
                 l0_mat = l0.reshape(3, 3)
                 l1_mat = l1.reshape(3, 3)
@@ -429,6 +429,21 @@ class BoltzmannTransportCalculator:
 
 
 register_calculator(BoltzmannTransportCalculator.name, BoltzmannTransportCalculator)
+
+
+def _transport_result_units() -> dict[str, str]:
+    """Return units for transport output fields."""
+    return {
+        "temperature": "K",
+        "chemical_potential_shift": "eV",
+        "fermi_energy": "eV",
+        "sigma": "S/m",
+        "sigma_avg": "S/m",
+        "seebeck": "V/K",
+        "seebeck_avg": "V/K",
+        "kappa": "W/(m*K)",
+        "kappa_avg": "W/(m*K)",
+    }
 
 
 def _prepare_temperature_array(temperature: float | npt.ArrayLike) -> npt.NDArray[np.float64]:
@@ -478,7 +493,10 @@ def _compute_mu_scan(
                 "kappa_avg": float(scan["kappa_avg"][imu, it]),
             }
         results[mu_key] = t_dict
-    results["meta"] = metadata
+    results["meta"] = {
+        **metadata,
+        "units": _transport_result_units(),
+    }
     return results
 
 
@@ -643,6 +661,7 @@ def calculate_spin_polarized_transport(
         "seebeck_avg": scan["seebeck_avg"][0],
         "kappa": scan["kappa"][0],
         "kappa_avg": scan["kappa_avg"][0],
+        "units": _transport_result_units(),
         **metadata,
     }
 
