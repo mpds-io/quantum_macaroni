@@ -48,7 +48,7 @@ select = [
     "PL",
     "D"
 ]
-ignore = ["E501"]
+ignore = ["E501", "PLR0913", "PLR0914", "PLR0915", "PLR0917"]
 
 # Allow fix for all enabled rules (when `--fix`) is provided.
 fixable = ["ALL"]
