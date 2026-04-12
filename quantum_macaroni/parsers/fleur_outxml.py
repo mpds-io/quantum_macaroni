@@ -1,4 +1,4 @@
-"""FLEUR ``out.xml`` parser and structure extraction helpers."""
+"""FLEUR XML parser and structure extraction helpers."""
 
 import importlib
 from pathlib import Path
@@ -7,13 +7,14 @@ from typing import TypedDict
 import numpy as np
 import numpy.typing as npt
 from lxml import etree  # ty:ignore[unresolved-import]
+from ase.data import chemical_symbols as ase_symbols
 
-from boltzpy.core.constants import BOHR_TO_ANG, HTR_TO_EV
-from boltzpy.parsers.base import ParserResult
+from quantum_macaroni.core.constants import BOHR_TO_ANG, HTR_TO_EV
+from quantum_macaroni.parsers.base import ParserResult
 
 
 class FleurRawData(TypedDict):
-    """Raw electronic data parsed from a FLEUR ``out.xml`` iteration."""
+    """Raw electronic data parsed from XML iteration."""
 
     kpoints: npt.NDArray[np.float64]
     eigenvalues: npt.NDArray[np.float64]
@@ -41,107 +42,7 @@ def _parse_coord(token: str) -> float:
 
 def _sym2z() -> dict[str, int]:
     """Return map from chemical symbol to atomic number."""
-    symbols = [
-        "H",
-        "He",
-        "Li",
-        "Be",
-        "B",
-        "C",
-        "N",
-        "O",
-        "F",
-        "Ne",
-        "Na",
-        "Mg",
-        "Al",
-        "Si",
-        "P",
-        "S",
-        "Cl",
-        "Ar",
-        "K",
-        "Ca",
-        "Sc",
-        "Ti",
-        "V",
-        "Cr",
-        "Mn",
-        "Fe",
-        "Co",
-        "Ni",
-        "Cu",
-        "Zn",
-        "Ga",
-        "Ge",
-        "As",
-        "Se",
-        "Br",
-        "Kr",
-        "Rb",
-        "Sr",
-        "Y",
-        "Zr",
-        "Nb",
-        "Mo",
-        "Tc",
-        "Ru",
-        "Rh",
-        "Pd",
-        "Ag",
-        "Cd",
-        "In",
-        "Sn",
-        "Sb",
-        "Te",
-        "I",
-        "Xe",
-        "Cs",
-        "Ba",
-        "La",
-        "Ce",
-        "Pr",
-        "Nd",
-        "Pm",
-        "Sm",
-        "Eu",
-        "Gd",
-        "Tb",
-        "Dy",
-        "Ho",
-        "Er",
-        "Tm",
-        "Yb",
-        "Lu",
-        "Hf",
-        "Ta",
-        "W",
-        "Re",
-        "Os",
-        "Ir",
-        "Pt",
-        "Au",
-        "Hg",
-        "Tl",
-        "Pb",
-        "Bi",
-        "Po",
-        "At",
-        "Rn",
-        "Fr",
-        "Ra",
-        "Ac",
-        "Th",
-        "Pa",
-        "U",
-        "Np",
-        "Pu",
-        "Am",
-        "Cm",
-        "Bk",
-        "Cf",
-    ]
-    return {value: idx + 1 for idx, value in enumerate(symbols)}
+    return {value: idx + 1 for idx, value in enumerate(ase_symbols[1:])}
 
 
 def structure_from_outxml(

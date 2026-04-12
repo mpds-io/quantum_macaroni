@@ -7,12 +7,12 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from boltzpy.calculators.base import get_calculator, register_calculator, tensor_average
-from boltzpy.core.constants import E_CHARGE, KB_EV, TWO_PI
-from boltzpy.core.numerics import nb_onsager_from_tdos_flat, nb_transport_dos_flat
-from boltzpy.interpolation import SKWInterpolator
-from boltzpy.mesh import TetrahedronMesh
-from boltzpy.parsers import DEFAULT_PARSER, ElectronicStructureParser, get_parser
+from quantum_macaroni.calculators.base import get_calculator, register_calculator, tensor_average
+from quantum_macaroni.core.constants import E_CHARGE, KB_EV, TWO_PI
+from quantum_macaroni.core.numerics import nb_onsager_from_tdos_flat, nb_transport_dos_flat
+from quantum_macaroni.interpolation import SKWInterpolator
+from quantum_macaroni.mesh import TetrahedronMesh
+from quantum_macaroni.parsers import DEFAULT_PARSER, ElectronicStructureParser, get_parser
 
 
 def _validate_bound_parameter(name: str, value: float, *, allow_zero: bool = False) -> None:
