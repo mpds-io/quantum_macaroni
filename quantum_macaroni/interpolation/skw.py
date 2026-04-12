@@ -8,14 +8,14 @@ import numpy.typing as npt
 import scipy.linalg
 from scipy.special import erfc
 
-from boltzpy.core.constants import TWO_PI
-from boltzpy.core.numerics import (
+from quantum_macaroni.core.constants import TWO_PI
+from quantum_macaroni.core.numerics import (
     nb_eval_energy_from_star,
     nb_eval_energy_velocity_from_star,
     nb_star_and_grad_batch,
     nb_star_batch,
 )
-from boltzpy.core.symmetry import point_group
+from quantum_macaroni.core.symmetry import point_group
 
 
 class SKWInterpolator:

@@ -1,6 +1,6 @@
-# BoltzPy
+# Quantum Macaroni ⚛️🍝
 
-BoltzPy is a modular Boltzmann-transport workflow for electronic-structure data.
+This toolbox is a modular Boltzmann-transport workflow for post-processing the electronic-structure data.
 
 Current pipeline:
 - Parser plugins for electronic-structure outputs (default parser: Fleur out.xml).
@@ -8,7 +8,8 @@ Current pipeline:
 - Tetrahedron k-space integration mesh.
 - Transport-property calculators (default: Boltzmann transport calculator).
 
-## Features
+
+### Features
 
 - Plugin architecture for parsers and calculators.
 - Transport tensors and isotropic averages.
@@ -16,23 +17,20 @@ Current pipeline:
 - Chemical-potential sweep relative to Fermi level.
 - CLI interface with JSON output.
 
-## Requirements
 
-- Python 3.11+
-- Core dependencies:
-	- ase
-	- lxml
-	- numba
-	- numpy
-	- scipy
+### Requirements
 
-Dependencies are defined in [pyproject.toml](pyproject.toml).
+- Python 3.11+:
+- ase
+- lxml
+- numba
+- numpy
+- scipy
+
 
 ## Installation
 
-Use your preferred environment manager.
-
-Example with pip:
+Use your preferred environment manager. An example with pip reads:
 
 ```bash
 python -m venv .venv
@@ -40,17 +38,16 @@ source .venv/bin/activate
 pip install -e .
 ```
 
+
 ## Quick Start (CLI)
 
-Main entry point is [main.py](main.py).
-
-Minimal run:
+Main entry point is [main.py](main.py). Minimal run:
 
 ```bash
 python main.py examples/PbTe-nospin/out-nospin.xml
 ```
 
-Run with temperature and chemical-potential sweeps:
+Run with the temperature and chemical-potential sweeps:
 
 ```bash
 python main.py examples/PbTe-nospin/out-nospin.xml \
@@ -61,6 +58,7 @@ python main.py examples/PbTe-nospin/out-nospin.xml \
 	--band-window -3 3 \
 	--output transport_results.json
 ```
+
 
 ### CLI Argument Rules for Temperature and Chemical Potential
 
@@ -76,9 +74,10 @@ Examples:
 
 For three-number form, the third value must be a positive integer (number of points).
 
+
 ## CLI Reference
 
-```text
+```
 python main.py FILEPATH [options]
 
 Options:
@@ -94,15 +93,15 @@ Options:
 	--output PATH                          output JSON file path (default: transport_results.json)
 ```
 
-Available parser/calculator names come from the runtime registries in
-[boltzpy/parsers/__init__.py](boltzpy/parsers/__init__.py) and
-[boltzpy/calculators/__init__.py](boltzpy/calculators/__init__.py).
+Available parser/calculator names come from the runtime registries in `quantum_macaroni/parsers/__init__.py`
+and `quantum_macaroni/calculators/__init__.py`.
+
 
 ## Output JSON Format
 
-The CLI stores calculation output to a JSON file (default: transport_results.json).
+The CLI stores calculation output to a JSON file (default: `transport_results.json`).
 
-When chemical potential is provided, structure is:
+If a chemical potential is provided, its structure is:
 
 ```json
 {
@@ -135,11 +134,11 @@ When chemical potential is provided, structure is:
 }
 ```
 
-Note: JSON keys are strings, so numeric keys for chemical potential and temperature are serialized as strings.
+NB: since JSON keys must be strings, the numeric keys for chemical potential and temperature are serialized.
 
 ## Python API
 
-Public API is exported from [boltzpy/__init__.py](boltzpy/__init__.py).
+Public API is exported from `quantum_macaroni/__init__.py`.
 
 Main high-level function:
 - `calculate_spin_polarized_transport`
@@ -148,7 +147,7 @@ Example:
 
 ```python
 import numpy as np
-from boltzpy import calculate_spin_polarized_transport
+from quantum_macaroni import calculate_spin_polarized_transport
 
 result = calculate_spin_polarized_transport(
 		"examples/PbTe-nospin/out-nospin.xml",
@@ -162,12 +161,13 @@ result = calculate_spin_polarized_transport(
 )
 ```
 
-For backward-compatible example script, see [examples/PbTe-nospin/boltz.py](examples/PbTe-nospin/boltz.py).
+For an example script, see `examples/PbTe-nospin/boltz.py`.
 
-## Project Layout
+
+### File Layout
 
 ```text
-boltzpy/
+quantum_macaroni/
 	calculators/      transport calculators and registry
 	core/             constants and numerics
 	interpolation/    SKW interpolator
@@ -175,5 +175,5 @@ boltzpy/
 	parsers/          parser interfaces and implementations
 examples/
 	PbTe-nospin/      sample input and usage script
-main.py             CLI entry point
+main.py               CLI entry point
 ```

@@ -5,7 +5,7 @@ from typing import Tuple
 import numpy as np
 import numpy.typing as npt
 
-from boltzpy.core.constants import TWO_PI
+from quantum_macaroni.core.constants import TWO_PI
 
 
 class TetrahedronMesh:

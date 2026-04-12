@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from boltzpy import available_calculators, available_parsers, calculate_spin_polarized_transport
+from quantum_macaroni import available_calculators, available_parsers, calculate_spin_polarized_transport
 
 GRID_SPEC_LEN = 3
 

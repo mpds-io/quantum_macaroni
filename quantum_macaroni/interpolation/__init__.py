@@ -1,5 +1,5 @@
 """Interpolation algorithms for band structures."""
 
-from boltzpy.interpolation.skw import SKWInterpolator
+from quantum_macaroni.interpolation.skw import SKWInterpolator
 
 __all__ = ["SKWInterpolator"]

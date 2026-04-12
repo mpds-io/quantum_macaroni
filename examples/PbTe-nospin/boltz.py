@@ -1,19 +1,19 @@
-"""Backward-compatible facade exposing historical imports from modular internals."""
+"""Backward-compatible facade exposing imports from modular internals."""
 
 import numpy as np
 
-from boltzpy.calculators.transport import (
+from quantum_macaroni.calculators.transport import (
     BoltzmannTransportCalculator,
     calculate_spin_polarized_transport,
 )
-from boltzpy.interpolation import SKWInterpolator
-from boltzpy.mesh import TetrahedronMesh
-from boltzpy.parsers.fleur_outxml import (
+from quantum_macaroni.interpolation import SKWInterpolator
+from quantum_macaroni.mesh import TetrahedronMesh
+from quantum_macaroni.parsers.fleur_outxml import (
     FleurOutxmlParser,
     parse_fleur_outxml,
     structure_from_outxml,
 )
-from boltzpy.parsers.fleur_outxml import (
+from quantum_macaroni.parsers.fleur_outxml import (
     read_symops_from_outxml as _read_symops_from_outxml,
 )
 

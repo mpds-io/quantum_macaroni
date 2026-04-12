@@ -1,8 +1,9 @@
 [project]
-name = "boltzpy"
-version = "1.0.0"
-description = "Add your description here"
+name = "quantum_macaroni"
+version = "0.0.1"
+description = "A toolbox for post-processing the electronic-structure data and calculation of Seebeck coefficient and electron conductivity"
 readme = "README.md"
+authors = [{name = "Anton Domnin", email = "a.v.daomnin@gmail.com"},]
 requires-python = ">=3.11"
 dependencies = [
     "ase>=3.28.0",
@@ -10,6 +11,19 @@ dependencies = [
     "numba>=0.65.0",
     "numpy>=2.4.4",
     "scipy>=1.17.1",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: AiiDA",
 ]
 
 [dependency-groups]

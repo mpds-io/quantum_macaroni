@@ -5,6 +5,7 @@ import math
 from ase.units import Bohr, Hartree
 from scipy.constants import physical_constants
 
+
 BOHR_TO_ANG = Bohr
 HBAR = physical_constants["Planck constant over 2 pi in eV s"][0]
 E_CHARGE = physical_constants["elementary charge"][0]
