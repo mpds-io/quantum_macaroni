@@ -61,9 +61,9 @@ def _onsager_to_transport(
 
     """
     l0_inv = np.linalg.inv(l0)
-    sigma = E_CHARGE * l0
-    seebeck = -(l1 @ l0_inv) / temperature
-    kappa = (E_CHARGE / temperature) * (l2 - l1 @ l0_inv @ l1)
+    sigma = E_CHARGE**2 * l0
+    seebeck = -(l1 @ l0_inv) / (E_CHARGE * temperature)
+    kappa = (E_CHARGE**2 / temperature) * (l2 - l1 @ l0_inv @ l1)
     return sigma, seebeck, kappa
 
 
