@@ -4,7 +4,7 @@ import numpy as np
 from quantum_macaroni.parsers.fleur_outxml import (
     read_symops_from_outxml as _read_symops_from_outxml,
 )
-from quantum_macaronicalculators.transport import (
+from quantum_macaroni.calculators.transport import (
     BoltzmannTransportCalculator,
     calculate_spin_polarized_transport,
 )
@@ -30,7 +30,7 @@ __all__ = [
 
 
 if __name__ == "__main__":
-    default_file = "out-nospin.xml"
+    default_file = "examples/PbTe-nospin/out-nospin.xml"
     temperature = [100.0, 300.0, 600.0, 900.0]
     chemical_potential = np.linspace(-0.5, 0.5, 11)
     tau = 1e-14
