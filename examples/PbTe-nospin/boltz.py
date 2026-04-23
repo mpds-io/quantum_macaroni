@@ -1,7 +1,7 @@
 """Backward-compatible facade exposing historical imports from modular internals."""
 
 import numpy as np
-from quantum_macaroni.fleur_outxml import (
+from quantum_macaroni.parsers.fleur_outxml import (
     read_symops_from_outxml as _read_symops_from_outxml,
 )
 from quantum_macaronicalculators.transport import (
