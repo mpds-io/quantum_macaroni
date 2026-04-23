@@ -12,6 +12,9 @@ dependencies = [
     "scipy>=1.17.1",
 ]
 
+[tool.setuptools.packages.find]
+include = ["quantum_macaroni*"]
+
 [dependency-groups]
 dev = [
     "prek>=0.3.8",
