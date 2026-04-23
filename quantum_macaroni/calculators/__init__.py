@@ -1,12 +1,12 @@
 """Transport calculator interfaces and implementations."""
 
-from boltzpy.calculators.base import (
+from quantum_macaroni.calculators.base import (
     available_calculators,
     get_calculator,
     register_calculator,
     tensor_average,
 )
-from boltzpy.calculators.transport import (
+from quantum_macaroni.calculators.transport import (
     BoltzmannTransportCalculator,
     calculate_spin_polarized_transport,
 )

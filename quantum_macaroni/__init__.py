@@ -1,15 +1,15 @@
-"""Public package API for BoltzPy modular transport workflows."""
+"""Public package API for quantum_macaroni modular transport workflows."""
 
-from boltzpy.calculators import (
+from quantum_macaroni.calculators import (
     BoltzmannTransportCalculator,
     available_calculators,
     calculate_spin_polarized_transport,
     get_calculator,
     register_calculator,
 )
-from boltzpy.interpolation import SKWInterpolator
-from boltzpy.mesh import TetrahedronMesh
-from boltzpy.parsers import (
+from quantum_macaroni.interpolation import SKWInterpolator
+from quantum_macaroni.mesh import TetrahedronMesh
+from quantum_macaroni.parsers import (
     DEFAULT_PARSER,
     FleurOutxmlParser,
     available_parsers,

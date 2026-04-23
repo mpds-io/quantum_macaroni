@@ -1,4 +1,4 @@
-"""Physical constants and conversion factors used by BoltzPy."""
+"""Physical constants and conversion factors used by quantum_macaroni."""
 
 import math
 

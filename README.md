@@ -1,6 +1,6 @@
-# BoltzPy
+# quantum_macaroni
 
-BoltzPy is a modular Boltzmann-transport workflow for electronic-structure data.
+quantum_macaroni is a modular Boltzmann-transport workflow for electronic-structure data.
 
 Current pipeline:
 - Parser plugins for electronic-structure outputs (default parser: Fleur out.xml).
@@ -95,8 +95,8 @@ Options:
 ```
 
 Available parser/calculator names come from the runtime registries in
-[boltzpy/parsers/__init__.py](boltzpy/parsers/__init__.py) and
-[boltzpy/calculators/__init__.py](boltzpy/calculators/__init__.py).
+[quantum_macaroni/parsers/__init__.py](quantum_macaroni/parsers/__init__.py) and
+[quantum_macaroni/calculators/__init__.py](quantum_macaroni/calculators/__init__.py).
 
 ## Output JSON Format
 
@@ -139,7 +139,7 @@ Note: JSON keys are strings, so numeric keys for chemical potential and temperat
 
 ## Python API
 
-Public API is exported from [boltzpy/__init__.py](boltzpy/__init__.py).
+Public API is exported from [quantum_macaroni/__init__.py](quantum_macaroni/__init__.py).
 
 Main high-level function:
 - `calculate_spin_polarized_transport`
@@ -148,7 +148,7 @@ Example:
 
 ```python
 import numpy as np
-from boltzpy import calculate_spin_polarized_transport
+from quantum_macaroni import calculate_spin_polarized_transport
 
 result = calculate_spin_polarized_transport(
 		"examples/PbTe-nospin/out-nospin.xml",
@@ -167,7 +167,7 @@ For backward-compatible example script, see [examples/PbTe-nospin/boltz.py](exam
 ## Project Layout
 
 ```text
-boltzpy/
+quantum_macaroni/
 	calculators/      transport calculators and registry
 	core/             constants and numerics
 	interpolation/    SKW interpolator

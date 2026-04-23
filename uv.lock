@@ -17,7 +17,7 @@ wheels = [
 ]
 
 [[package]]
-name = "boltzpy"
+name = "quantum_macaroni"
 version = "1.0.0"
 source = { virtual = "." }
 dependencies = [

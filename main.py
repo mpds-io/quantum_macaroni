@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from boltzpy import available_calculators, available_parsers, calculate_spin_polarized_transport
+from quantum_macaroni import available_calculators, available_parsers, calculate_spin_polarized_transport
 
 GRID_SPEC_LEN = 3
 
@@ -33,7 +33,7 @@ def _parse_scalar_or_grid(values: list[float], name: str) -> float | np.ndarray:
 
 def _build_parser() -> argparse.ArgumentParser:
     """Create CLI parser for transport runs."""
-    parser = argparse.ArgumentParser(description="BoltzPy transport calculator")
+    parser = argparse.ArgumentParser(description="Boltzman semiclassical transport calculator")
     parser.add_argument("filepath", help="Path to input electronic-structure file")
     parser.add_argument(
         "--temperature",

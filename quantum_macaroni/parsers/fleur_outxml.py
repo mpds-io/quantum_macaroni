@@ -8,8 +8,8 @@ import numpy as np
 import numpy.typing as npt
 from lxml import etree  # ty:ignore[unresolved-import]
 
-from boltzpy.core.constants import BOHR_TO_ANG, HTR_TO_EV
-from boltzpy.parsers.base import ParserResult
+from quantum_macaroni.core.constants import BOHR_TO_ANG, HTR_TO_EV
+from quantum_macaroni.parsers.base import ParserResult
 
 
 class FleurRawData(TypedDict):

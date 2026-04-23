@@ -1,5 +1,5 @@
 """k-space meshing helpers."""
 
-from boltzpy.mesh.tetrahedron import TetrahedronMesh
+from quantum_macaroni.mesh.tetrahedron import TetrahedronMesh
 
 __all__ = ["TetrahedronMesh"]
