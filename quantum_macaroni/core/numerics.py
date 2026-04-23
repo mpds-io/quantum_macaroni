@@ -6,7 +6,7 @@ import numba as _nb
 import numpy as np
 import numpy.typing as npt
 
-from boltzpy.core.constants import HBAR, TWO_PI
+from quantum_macaroni.core.constants import HBAR, TWO_PI
 
 # Minimal energy span used to treat a tetrahedron as effectively degenerate.
 MIN_TETRAEDRON_ENERGY = 1e-14
