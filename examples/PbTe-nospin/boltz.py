@@ -1,20 +1,20 @@
 """Backward-compatible facade exposing historical imports from modular internals."""
 
 import numpy as np
-
+from quantum_macaroni.fleur_outxml import (
+    read_symops_from_outxml as _read_symops_from_outxml,
+)
 from quantum_macaronicalculators.transport import (
     BoltzmannTransportCalculator,
     calculate_spin_polarized_transport,
 )
+
 from quantum_macaroni.interpolation import SKWInterpolator
 from quantum_macaroni.mesh import TetrahedronMesh
 from quantum_macaroni.parsers.fleur_outxml import (
     FleurOutxmlParser,
     parse_fleur_outxml,
     structure_from_outxml,
-)
-from quantum_macaroni.fleur_outxml import (
-    read_symops_from_outxml as _read_symops_from_outxml,
 )
 
 __all__ = [

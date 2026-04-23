@@ -1,14 +1,15 @@
 """Boltzmann transport calculators and high-level orchestration entry point."""
 
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 
-from quantum_macaroni.calculators.base import get_calculator, register_calculator, tensor_average
-from quantum_macaroni.core.constants import E_CHARGE, KB_EV, TWO_PI
+from quantum_macaroni.calculators.base import TransportTuple, get_calculator, register_calculator, tensor_average
+from quantum_macaroni.core.constants import ANG3_TO_M3, E_CHARGE, KB_EV, TWO_PI
 from quantum_macaroni.core.numerics import nb_onsager_from_tdos_flat, nb_transport_dos_flat
 from quantum_macaroni.interpolation import SKWInterpolator
 from quantum_macaroni.mesh import TetrahedronMesh
@@ -25,6 +26,47 @@ def _validate_bound_parameter(name: str, value: float, *, allow_zero: bool = Fal
         raise ValueError(f"{name} must be positive")
 
 
+@dataclass
+class EnergyGridDefaults:
+    """Shared default parameters for energy-grid construction."""
+
+    energy_window_kbt_factor: float = 10.0
+    min_energy_window: float = 0.5
+    energy_step_kbt_divisor: float = 10.0
+    min_energy_step: float = 1e-4
+    low_temp_kbt_threshold: float = 1e-10
+    low_temp_energy_window: float = 0.5
+    low_temp_energy_step: float = 1e-3
+
+
+DEFAULTS = EnergyGridDefaults()
+
+
+def _onsager_to_transport(
+    l0: npt.NDArray[np.float64],
+    l1: npt.NDArray[np.float64],
+    l2: npt.NDArray[np.float64],
+    temperature: float,
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Convert Onsager coefficients to physical transport tensors.
+
+    Args:
+        l0: 3x3 Onsager L0 tensor.
+        l1: 3x3 Onsager L1 tensor.
+        l2: 3x3 Onsager L2 tensor.
+        temperature: Temperature in kelvin.
+
+    Returns:
+        Tuple ``(sigma, seebeck, kappa)`` of 3x3 transport tensors.
+
+    """
+    l0_inv = np.linalg.inv(l0)
+    sigma = E_CHARGE * l0
+    seebeck = -(l1 @ l0_inv) / temperature
+    kappa = (E_CHARGE / temperature) * (l2 - l1 @ l0_inv @ l1)
+    return sigma, seebeck, kappa
+
+
 class BoltzmannTransportCalculator:
     """Evaluate electrical and thermal transport tensors from an interpolator."""
 
@@ -35,13 +77,13 @@ class BoltzmannTransportCalculator:
         interpolator: SKWInterpolator,
         tau: float = 1e-14,
         chunk_size: int = 4096,
-        energy_window_kbt_factor: float = 10.0,
-        min_energy_window: float = 0.5,
-        energy_step_kbt_divisor: float = 10.0,
-        min_energy_step: float = 1e-4,
-        low_temp_kbt_threshold: float = 1e-10,
-        low_temp_energy_window: float = 0.5,
-        low_temp_energy_step: float = 1e-3,
+        energy_window_kbt_factor: float = DEFAULTS.energy_window_kbt_factor,
+        min_energy_window: float = DEFAULTS.min_energy_window,
+        energy_step_kbt_divisor: float = DEFAULTS.energy_step_kbt_divisor,
+        min_energy_step: float = DEFAULTS.min_energy_step,
+        low_temp_kbt_threshold: float = DEFAULTS.low_temp_kbt_threshold,
+        low_temp_energy_window: float = DEFAULTS.low_temp_energy_window,
+        low_temp_energy_step: float = DEFAULTS.low_temp_energy_step,
     ) -> None:
         """Initialize transport calculator.
 
@@ -60,6 +102,9 @@ class BoltzmannTransportCalculator:
         """
         self.interp = interpolator
         self.tau = tau
+        _validate_bound_parameter("tau", tau)
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
         self.chunk_size = chunk_size
         self.tetra_mesh: TetrahedronMesh | None = None
         _validate_bound_parameter("energy_window_kbt_factor", energy_window_kbt_factor)
@@ -77,6 +122,23 @@ class BoltzmannTransportCalculator:
         self.low_temp_energy_window = low_temp_energy_window
         self.low_temp_energy_step = low_temp_energy_step
 
+    def _spin_degeneracy(self) -> float:
+        """Return spin degeneracy factor (2 for non-spin-polarized, 1 otherwise)."""
+        return 2.0 if self.interp.nspin == 1 else 1.0
+
+    @staticmethod
+    def _bz_norm(mesh: TetrahedronMesh) -> float:
+        """Return Boltzmann normalization factor converting to SI units.
+
+        Args:
+            mesh: Tetrahedron mesh providing BZ volume.
+
+        Returns:
+            Normalization factor with units converting Å⁻³ to m⁻³.
+
+        """
+        return mesh.tetra_vol / (TWO_PI**3) * ANG3_TO_M3
+
     def _ensure_tetra_mesh(self, kpoint_mesh: tuple[int, int, int]) -> None:
         """Create or update tetrahedron mesh for current integration grid.
 
@@ -88,7 +150,7 @@ class BoltzmannTransportCalculator:
         if self.tetra_mesh is None or not np.array_equal(self.tetra_mesh.mesh, mesh_array):
             self.tetra_mesh = TetrahedronMesh(self.interp._lat, kpoint_mesh)
 
-    def calculate_onsager_coefficients(  # noqa:
+    def calculate_onsager_coefficients(  # noqa: PLR0913
         self,
         fermi_level: float,
         temperature: float,
@@ -105,6 +167,9 @@ class BoltzmannTransportCalculator:
 
         Returns:
             tuple of 3x3 Onsager tensors ``(l0, l1, l2)``.
+
+        Raises:
+            RuntimeError: If tetrahedron mesh was not initialized.
 
         """
         if kchunk is None:
@@ -143,12 +208,12 @@ class BoltzmannTransportCalculator:
 
         # A non-spin-polarized calculation stores one spin channel, but the physical transport
         # still carries spin degeneracy two, so we restore that factor here instead of in parsers.
-        if self.interp.nspin == 1:
-            l0_total *= 2.0
-            l1_total *= 2.0
-            l2_total *= 2.0
+        spin_factor = self._spin_degeneracy()
+        l0_total *= spin_factor
+        l1_total *= spin_factor
+        l2_total *= spin_factor
 
-        norm = mesh.tetra_vol / (TWO_PI**3) * 1e30
+        norm = self._bz_norm(mesh)
         l0_total *= norm
         l1_total *= norm
         l2_total *= norm
@@ -161,14 +226,7 @@ class BoltzmannTransportCalculator:
         temperature: float,
         kpoint_mesh: tuple[int, int, int],
         kchunk: int | None = None,
-    ) -> tuple[
-        npt.NDArray[np.float64],
-        npt.NDArray[np.float64],
-        npt.NDArray[np.float64],
-        npt.NDArray[np.float64],
-        npt.NDArray[np.float64],
-        npt.NDArray[np.float64],
-    ]:
+    ) -> TransportTuple:
         """Return transport tensors for the given state point.
 
         Args:
@@ -183,10 +241,7 @@ class BoltzmannTransportCalculator:
         """
         l0, l1, l2 = self.calculate_onsager_coefficients(fermi_level, temperature, kpoint_mesh, kchunk=kchunk)
 
-        l0_inv = np.linalg.inv(l0)
-        sigma = E_CHARGE * l0
-        seebeck = -(l1 @ l0_inv) / temperature
-        kappa = (E_CHARGE / temperature) * (l2 - l1 @ l0_inv @ l1)
+        sigma, seebeck, kappa = _onsager_to_transport(l0, l1, l2, temperature)
 
         return sigma, seebeck, kappa, l0, l1, l2
 
@@ -300,6 +355,14 @@ class BoltzmannTransportCalculator:
         The grid is fine enough for the tightest thermal resolution (lowest T)
         and wide enough for the broadest window (highest T) shifted to every
         chemical potential value.
+
+        Args:
+            mu_values: Absolute chemical potential values in eV.
+            temperatures: Temperature array in kelvin.
+
+        Returns:
+            Unified energy grid in eV.
+
         """
         kbts = KB_EV * temperatures
         normal_mask = kbts > self.low_temp_kbt_threshold
@@ -350,6 +413,9 @@ class BoltzmannTransportCalculator:
             Dictionary with keys ``"sigma"``, ``"seebeck"``, ``"kappa"``
             (shape ``(n_mu, n_T, 3, 3)``) and ``"*_avg"`` (shape ``(n_mu, n_T)``).
 
+        Raises:
+            RuntimeError: If tetrahedron mesh was not initialized.
+
         """
         if kchunk is None:
             kchunk = self.chunk_size
@@ -377,10 +443,10 @@ class BoltzmannTransportCalculator:
                 e_grid,
             )
 
-        if self.interp.nspin == 1:
-            tdos_total *= 2.0
+        spin_factor = self._spin_degeneracy()
+        tdos_total *= spin_factor
 
-        norm = mesh.tetra_vol / (TWO_PI**3) * 1e30
+        norm = self._bz_norm(mesh)
 
         n_mu = mu_values.shape[0]
         n_t = temperatures.shape[0]
@@ -406,10 +472,7 @@ class BoltzmannTransportCalculator:
                 l1_mat = l1.reshape(3, 3)
                 l2_mat = l2.reshape(3, 3)
 
-                l0_inv = np.linalg.inv(l0_mat)
-                sig = E_CHARGE * l0_mat
-                see = -(l1_mat @ l0_inv) / temp
-                kap = (E_CHARGE / temp) * (l2_mat - l1_mat @ l0_inv @ l1_mat)
+                sig, see, kap = _onsager_to_transport(l0_mat, l1_mat, l2_mat, temp)
 
                 sigma_all[imu, it] = sig
                 seebeck_all[imu, it] = see
@@ -432,7 +495,12 @@ register_calculator(BoltzmannTransportCalculator.name, BoltzmannTransportCalcula
 
 
 def _transport_result_units() -> dict[str, str]:
-    """Return units for transport output fields."""
+    """Return units for transport output fields.
+
+    Returns:
+        Dictionary mapping field names to their physical units.
+
+    """
     return {
         "temperature": "K",
         "chemical_potential_shift": "eV",
@@ -475,7 +543,21 @@ def _compute_mu_scan(
     chunk_size: int,
     metadata: dict[str, Any],
 ) -> dict[float | str, Any]:
-    """Sweep chemical potentials and temperatures, returning nested dict."""
+    """Sweep chemical potentials and temperatures, returning nested dict.
+
+    Args:
+        calc: Transport calculator instance.
+        fermi: Fermi level in eV.
+        mu_shifts: Chemical potential shifts relative to Fermi level in eV.
+        temperatures: Temperature array in kelvin.
+        kpoint_mesh: Integration mesh dimensions.
+        chunk_size: k-point chunk size for batched evaluation.
+        metadata: Dictionary with Fermi energy, jspins, parser, and calculator info.
+
+    Returns:
+        Nested dictionary keyed by chemical potential shift and temperature.
+
+    """
     mu_abs = fermi + mu_shifts
     scan = calc.calculate_transport_scan(mu_abs, temperatures, kpoint_mesh, kchunk=chunk_size)
 
@@ -509,13 +591,13 @@ def calculate_spin_polarized_transport(
     lr_ratio: int = 5,
     band_window: tuple[float, float] | None = None,
     chunk_size: int = 4096,
-    energy_window_kbt_factor: float = 10.0,
-    min_energy_window: float = 0.5,
-    energy_step_kbt_divisor: float = 10.0,
-    min_energy_step: float = 1e-4,
-    low_temp_kbt_threshold: float = 1e-10,
-    low_temp_energy_window: float = 0.5,
-    low_temp_energy_step: float = 1e-3,
+    energy_window_kbt_factor: float = DEFAULTS.energy_window_kbt_factor,
+    min_energy_window: float = DEFAULTS.min_energy_window,
+    energy_step_kbt_divisor: float = DEFAULTS.energy_step_kbt_divisor,
+    min_energy_step: float = DEFAULTS.min_energy_step,
+    low_temp_kbt_threshold: float = DEFAULTS.low_temp_kbt_threshold,
+    low_temp_energy_window: float = DEFAULTS.low_temp_energy_window,
+    low_temp_energy_step: float = DEFAULTS.low_temp_energy_step,
     parser: str | ElectronicStructureParser = DEFAULT_PARSER,
     calculator: str = "boltzmann",
 ) -> dict[str, Any] | dict[float | str, Any]:
@@ -570,13 +652,6 @@ def calculate_spin_polarized_transport(
     fermi = parsed.fermi_energy
     eigenvalues = parsed.eigenvalues
 
-    # for debugging
-    # print(f"Parsing {Path(filepath).name} with parser '{parser_obj.name}'...")
-    # print(f"  jspins={parsed.jspins}, nk={parsed.nk}, nbands={parsed.nbands}")
-    # print(f"  E_Fermi = {fermi:.4f} eV")
-    # print(f"  det(A) = {np.linalg.det(parsed.lattice):.2f} A^3")
-    # print(f"  symops = {len(parsed.symops)}")
-
     if band_window is not None:
         emin, emax = band_window
         emin_abs = fermi + emin
@@ -608,13 +683,7 @@ def calculate_spin_polarized_transport(
     print(f"  MAE = {interp.mae:.6f} eV")
     print(f"  NR = {interp.nr}, NPG = {interp._npg}, dt = {time.time() - t_skw:.2f} s")
 
-    temp_input = np.asarray(temperature, dtype=np.float64)
-    is_scalar_temp = temp_input.ndim == 0
-    temperatures = np.array([float(temp_input)], dtype=np.float64) if is_scalar_temp else np.ravel(temp_input)
-    if temperatures.size == 0:
-        raise ValueError("temperature array must not be empty")
-    if np.any(temperatures <= 0.0):
-        raise ValueError("temperature must be positive")
+    temperatures = _prepare_temperature_array(temperature)
 
     # --- chemical potential grid -------------------------------------------
     use_mu_scan = chemical_potential is not None
