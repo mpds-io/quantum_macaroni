@@ -205,3 +205,10 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# OpenCode
+.opencode/
+node_modules
+opencode.json
+package-lock.json
+package.json
