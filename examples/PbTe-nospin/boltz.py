@@ -31,11 +31,11 @@ __all__ = [
 
 if __name__ == "__main__":
     default_file = "out-nospin.xml"
-    temperature = [300.0, 600.0, 900.0]
+    temperature = [100.0, 300.0, 600.0, 900.0]
     chemical_potential = np.linspace(-0.5, 0.5, 11)
     tau = 1e-14
-    mesh = (80, 80, 80)
-    lr_ratio = 20
+    mesh = (96, 96, 96)
+    lr_ratio = 25
     band_window = (-3, 3)
     chunk_size = 4096
 
