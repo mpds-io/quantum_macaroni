@@ -61,9 +61,12 @@ def _onsager_to_transport(
 
     """
     l0_inv = np.linalg.inv(l0)
-    sigma = E_CHARGE**2 * l0
-    seebeck = -(l1 @ l0_inv) / (E_CHARGE * temperature)
-    kappa = (E_CHARGE**2 / temperature) * (l2 - l1 @ l0_inv @ l1)
+    # The moment integrals use eV as their energy unit. Only one factor
+    # of the elementary charge is needed for sigma and kappa, and no charge
+    # factor is needed for Seebeck because eV per elementary charge is a volt.
+    sigma = E_CHARGE * l0
+    seebeck = -(l0_inv @ l1) / temperature
+    kappa = (E_CHARGE / temperature) * (l2 - l1 @ l0_inv @ l1)
     return sigma, seebeck, kappa
 
 
