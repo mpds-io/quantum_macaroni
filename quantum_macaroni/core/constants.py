@@ -11,3 +11,5 @@ E_CHARGE = physical_constants["elementary charge"][0]
 KB_EV = physical_constants["Boltzmann constant in eV/K"][0]
 HTR_TO_EV = Hartree
 TWO_PI = 2.0 * math.pi
+ANG_TO_M = 1e-10
+ANG3_TO_M3 = 1e30
