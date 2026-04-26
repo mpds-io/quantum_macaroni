@@ -1,20 +1,22 @@
 """Backward-compatible facade exposing historical imports from modular internals."""
 
+from typing import Any, cast
+
 import numpy as np
-from quantum_macaroni.parsers.fleur_outxml import (
-    read_symops_from_outxml as _read_symops_from_outxml,
-)
+
 from quantum_macaroni.calculators.transport import (
     BoltzmannTransportCalculator,
     calculate_spin_polarized_transport,
 )
-
 from quantum_macaroni.interpolation import SKWInterpolator
 from quantum_macaroni.mesh import TetrahedronMesh
 from quantum_macaroni.parsers.fleur_outxml import (
     FleurOutxmlParser,
     parse_fleur_outxml,
     structure_from_outxml,
+)
+from quantum_macaroni.parsers.fleur_outxml import (
+    read_symops_from_outxml as _read_symops_from_outxml,
 )
 
 __all__ = [
@@ -52,15 +54,16 @@ if __name__ == "__main__":
         band_window=band_window,
         chunk_size=chunk_size,
     )
+    result_by_mu = cast(dict[float | str, Any], result)
 
-    meta = result["meta"]
+    meta = result_by_mu["meta"]
     print(f"  E_Fermi = {meta['fermi_energy']:.4f} eV")
 
     for mu in chemical_potential:
         mu_key = float(mu)
         print(f"\n  mu = E_F + {mu_key:+.4f} eV")
         for temp in temperature:
-            data = result[mu_key][float(temp)]
+            data = result_by_mu[mu_key][float(temp)]
             print(
                 f"    T={temp:6.1f} K: "
                 f"sigma={data['sigma_avg']:.4e} S/m, "
