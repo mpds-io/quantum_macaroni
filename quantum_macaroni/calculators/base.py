@@ -46,12 +46,29 @@ _CALCULATORS: dict[str, type[TransportCalculator]] = {}
 
 
 def register_calculator(name: str, calculator_cls: type[TransportCalculator]) -> None:
-    """Register a calculator class under ``name``."""
+    """Register a calculator class under ``name``.
+
+    Args:
+        name: Registry key for the calculator.
+        calculator_cls: Calculator class to register.
+
+    """
     _CALCULATORS[name] = calculator_cls
 
 
 def get_calculator(name: str) -> type[TransportCalculator]:
-    """Return calculator class registered under ``name``."""
+    """Return calculator class registered under ``name``.
+
+    Args:
+        name: Registered calculator name.
+
+    Returns:
+        Calculator class.
+
+    Raises:
+        ValueError: If calculator name is unknown.
+
+    """
     try:
         return _CALCULATORS[name]
     except KeyError as exc:
@@ -60,10 +77,23 @@ def get_calculator(name: str) -> type[TransportCalculator]:
 
 
 def available_calculators() -> tuple[str, ...]:
-    """Return sorted names of all registered calculators."""
+    """Return sorted names of all registered calculators.
+
+    Returns:
+        Tuple with calculator names.
+
+    """
     return tuple(sorted(_CALCULATORS))
 
 
 def tensor_average(tensor: npt.NDArray[np.float64]) -> float:
-    """Return isotropic average as one-third of tensor trace."""
+    """Return isotropic average as one-third of tensor trace.
+
+    Args:
+        tensor: 3x3 transport tensor.
+
+    Returns:
+        Scalar isotropic average.
+
+    """
     return float(np.trace(tensor) / 3.0)

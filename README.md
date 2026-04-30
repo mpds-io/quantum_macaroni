@@ -93,9 +93,9 @@ Options:
 	--output PATH                          output JSON file path (default: transport_results.json)
 ```
 
-Available parser/calculator names come from the runtime registries in `quantum_macaroni/parsers/__init__.py`
-and `quantum_macaroni/calculators/__init__.py`.
-
+Available parser/calculator names come from the runtime registries in
+[quantum_macaroni/parsers/__init__.py](quantum_macaroni/parsers/__init__.py) and
+[quantum_macaroni/calculators/__init__.py](quantum_macaroni/calculators/__init__.py).
 
 ## Output JSON Format
 
@@ -138,7 +138,7 @@ NB: since JSON keys must be strings, the numeric keys for chemical potential and
 
 ## Python API
 
-Public API is exported from `quantum_macaroni/__init__.py`.
+Public API is exported from [quantum_macaroni/__init__.py](quantum_macaroni/__init__.py).
 
 Main high-level function:
 - `calculate_spin_polarized_transport`

@@ -1,4 +1,4 @@
-"""Public package API for modular transport workflows."""
+"""Public package API for quantum_macaroni modular transport workflows."""
 
 from quantum_macaroni.calculators import (
     BoltzmannTransportCalculator,
