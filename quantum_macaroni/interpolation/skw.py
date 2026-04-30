@@ -17,6 +17,11 @@ from quantum_macaroni.core.numerics import (
 )
 from quantum_macaroni.core.symmetry import point_group
 
+SKW_DAMPING_C1 = 0.25
+SKW_DAMPING_C2 = 0.25
+SHELL_GROUPING_RTOL = 1e-8
+SHELL_GROUPING_FLOOR = 1e-30
+
 
 class SKWInterpolator:
     """Star-function interpolator for periodic band structures."""
@@ -46,6 +51,9 @@ class SKWInterpolator:
             ValueError: If k-point array has unexpected shape.
 
         """
+        if lr_ratio <= 0:
+            raise ValueError("lr_ratio must be positive")
+
         eigenvalues = np.ascontiguousarray(np.atleast_3d(eigenvalues), dtype=np.float64)
         self.nspin, self.nk, self.nbands = eigenvalues.shape
         kpoints = np.ascontiguousarray(np.asarray(kpoints, dtype=np.float64))
@@ -82,8 +90,8 @@ class SKWInterpolator:
         self._rot_rpts = np.ascontiguousarray(np.array([rot @ self._rpts.T for rot in self._pg], dtype=np.float64))
         self._rot_rpts_flat = np.ascontiguousarray(self._rot_rpts.reshape(-1), dtype=np.float64)
 
-        c1 = 0.25
-        c2 = 0.25
+        c1 = SKW_DAMPING_C1
+        c2 = SKW_DAMPING_C2
         if self.nr > 1 and r2[1] > 0:
             ratio = r2 / r2[1]
             # Damping long-range stars regularizes the linear system and reduces the tendency
@@ -161,7 +169,7 @@ class SKWInterpolator:
             right = r2[idx]
             # Shells are grouped by nearly equal metric length so symmetry representatives are
             # chosen from physically equivalent reciprocal distances rather than raw indices.
-            if abs(right - left) > max(left, right) * 1e-8 + 1e-30:
+            if abs(right - left) > max(left, right) * SHELL_GROUPING_RTOL + SHELL_GROUPING_FLOOR:
                 bounds.append(idx)
         bounds.append(len(r2))
 
@@ -229,6 +237,9 @@ class SKWInterpolator:
             Tuple ``(e_all, vel_all)`` with shapes ``(nbands, nk)`` and ``(nbands, nk, 3)``.
 
         """
+        if not 0 <= spin < self.nspin:
+            raise ValueError(f"spin must be in [0, {self.nspin - 1}], got {spin}")
+
         kpoints_frac = np.ascontiguousarray(np.atleast_2d(kpoints_frac), dtype=np.float64)
         nk = len(kpoints_frac)
         e_all = np.empty((self.nbands, nk), dtype=np.float64)

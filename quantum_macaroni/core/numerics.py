@@ -6,14 +6,17 @@ import numba as _nb
 import numpy as np
 import numpy.typing as npt
 
-from quantum_macaroni.core.constants import HBAR, TWO_PI
+from quantum_macaroni.core.constants import ANG_TO_M, HBAR, TWO_PI
 
 # Minimal energy span used to treat a tetrahedron as effectively degenerate.
-MIN_TETRAEDRON_ENERGY = 1e-14
+MIN_TETRAHEDRON_ENERGY = 1e-14
 # Minimal occupation-weight derivative contribution considered above numerical noise.
-MIN_TETRAEDRON_WEIGHT = 1e-30
+MIN_TETRAHEDRON_WEIGHT = 1e-30
 # kBT threshold below which the zero-temperature integration fallback is used.
 MIN_KBT_ZERO_T = 1e-14
+
+MIN_TETRAEDRON_ENERGY = MIN_TETRAHEDRON_ENERGY
+MIN_TETRAEDRON_WEIGHT = MIN_TETRAHEDRON_WEIGHT
 
 
 @_nb.njit(cache=True, fastmath=True)
@@ -140,7 +143,7 @@ def nb_transport_dos_flat(  # noqa: C901, PLR0912
 
             # The tetrahedron weights assume ordered corner energies; sorting locally is cheaper
             # than carrying a pre-sorted connectivity for every band and k-mesh.
-            if ee3 - ee0 < MIN_TETRAEDRON_ENERGY:
+            if ee3 - ee0 < MIN_TETRAHEDRON_ENERGY:
                 continue
 
             ie_lo = int((ee0 - half_de - e_min) * inv_de)
@@ -175,7 +178,7 @@ def nb_transport_dos_flat(  # noqa: C901, PLR0912
                     dw = (w_hi[ic] - w_lo[ic]) * inv_de
                     # Tiny contributions are skipped to avoid spending time on numerical noise
                     # that is below the resolution implied by the chosen energy grid.
-                    if dw < MIN_TETRAEDRON_WEIGHT:
+                    if dw < MIN_TETRAHEDRON_WEIGHT:
                         continue
 
                     dw_tau = dw * tau
@@ -443,8 +446,8 @@ def nb_eval_energy_velocity_from_star(
             gf2 = g2.real
             e_all[b, k] = e_sum.real
 
-            vel_all[b, k, 0] = (gf0 * f00 + gf1 * f01 + gf2 * f02) / HBAR * 1e-10
-            vel_all[b, k, 1] = (gf0 * f10 + gf1 * f11 + gf2 * f12) / HBAR * 1e-10
-            vel_all[b, k, 2] = (gf0 * f20 + gf1 * f21 + gf2 * f22) / HBAR * 1e-10
+            vel_all[b, k, 0] = (gf0 * f00 + gf1 * f01 + gf2 * f02) / HBAR * ANG_TO_M
+            vel_all[b, k, 1] = (gf0 * f10 + gf1 * f11 + gf2 * f12) / HBAR * ANG_TO_M
+            vel_all[b, k, 2] = (gf0 * f20 + gf1 * f21 + gf2 * f22) / HBAR * ANG_TO_M
 
     return e_all, vel_all

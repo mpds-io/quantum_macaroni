@@ -1,6 +1,6 @@
 [project]
 name = "quantum_macaroni"
-version = "1.0.0"
+version = "1.0.1"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -11,6 +11,9 @@ dependencies = [
     "numpy>=2.4.4",
     "scipy>=1.17.1",
 ]
+
+[tool.setuptools.packages.find]
+include = ["quantum_macaroni*"]
 
 [dependency-groups]
 dev = [

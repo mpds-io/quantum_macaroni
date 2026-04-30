@@ -1,7 +1,5 @@
 """Regular k-space mesh and tetrahedral decomposition utilities."""
 
-from typing import Tuple
-
 import numpy as np
 import numpy.typing as npt
 
@@ -23,7 +21,7 @@ class TetrahedronMesh:
         dtype=np.int32,
     )
 
-    def __init__(self, lattice: npt.ArrayLike, mesh: Tuple[int, int, int]) -> None:
+    def __init__(self, lattice: npt.ArrayLike, mesh: tuple[int, int, int]) -> None:
         """Build mesh objects for a given real-space lattice and mesh dimensions.
 
         Args:
@@ -31,6 +29,9 @@ class TetrahedronMesh:
             mesh: Number of divisions along ``(a, b, c)`` reciprocal axes.
 
         """
+        if any(m <= 0 for m in mesh):
+            raise ValueError(f"mesh dimensions must be positive, got {mesh}")
+
         self.lattice = np.ascontiguousarray(np.asarray(lattice, dtype=np.float64))
         self.mesh = np.array(mesh, dtype=np.int32)
         self.recip_lattice = TWO_PI * np.linalg.inv(self.lattice).T

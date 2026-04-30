@@ -6,10 +6,13 @@ from typing import TypedDict
 
 import numpy as np
 import numpy.typing as npt
+from ase.data import chemical_symbols
 from lxml import etree  # ty:ignore[unresolved-import]
 
 from quantum_macaroni.core.constants import BOHR_TO_ANG, HTR_TO_EV
 from quantum_macaroni.parsers.base import ParserResult
+
+_SYMBOL_TO_Z = {symbol: idx for idx, symbol in enumerate(chemical_symbols[1:], start=1)}
 
 
 class FleurRawData(TypedDict):
@@ -39,111 +42,6 @@ def _parse_coord(token: str) -> float:
     return float(token)
 
 
-def _sym2z() -> dict[str, int]:
-    """Return map from chemical symbol to atomic number."""
-    symbols = [
-        "H",
-        "He",
-        "Li",
-        "Be",
-        "B",
-        "C",
-        "N",
-        "O",
-        "F",
-        "Ne",
-        "Na",
-        "Mg",
-        "Al",
-        "Si",
-        "P",
-        "S",
-        "Cl",
-        "Ar",
-        "K",
-        "Ca",
-        "Sc",
-        "Ti",
-        "V",
-        "Cr",
-        "Mn",
-        "Fe",
-        "Co",
-        "Ni",
-        "Cu",
-        "Zn",
-        "Ga",
-        "Ge",
-        "As",
-        "Se",
-        "Br",
-        "Kr",
-        "Rb",
-        "Sr",
-        "Y",
-        "Zr",
-        "Nb",
-        "Mo",
-        "Tc",
-        "Ru",
-        "Rh",
-        "Pd",
-        "Ag",
-        "Cd",
-        "In",
-        "Sn",
-        "Sb",
-        "Te",
-        "I",
-        "Xe",
-        "Cs",
-        "Ba",
-        "La",
-        "Ce",
-        "Pr",
-        "Nd",
-        "Pm",
-        "Sm",
-        "Eu",
-        "Gd",
-        "Tb",
-        "Dy",
-        "Ho",
-        "Er",
-        "Tm",
-        "Yb",
-        "Lu",
-        "Hf",
-        "Ta",
-        "W",
-        "Re",
-        "Os",
-        "Ir",
-        "Pt",
-        "Au",
-        "Hg",
-        "Tl",
-        "Pb",
-        "Bi",
-        "Po",
-        "At",
-        "Rn",
-        "Fr",
-        "Ra",
-        "Ac",
-        "Th",
-        "Pa",
-        "U",
-        "Np",
-        "Pu",
-        "Am",
-        "Cm",
-        "Bk",
-        "Cf",
-    ]
-    return {value: idx + 1 for idx, value in enumerate(symbols)}
-
-
 def structure_from_outxml(
     filepath: str | Path,
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.int_]]:
@@ -168,7 +66,7 @@ def structure_from_outxml(
         atoms, cell, _ = get_structure_data(xmltree, schema)
         cell = np.array(cell)
         frac_pos = np.array([atom.position for atom in atoms]) @ np.linalg.inv(cell)
-        mapping = _sym2z()
+        mapping = _SYMBOL_TO_Z
         return cell, frac_pos, np.array([mapping.get(atom.symbol, 0) for atom in atoms])
     except ImportError:
         # Keep a pure-lxml fallback so the package remains usable in lightweight setups
@@ -224,6 +122,8 @@ def parse_fleur_outxml(filepath: str | Path, iteration: str = "last") -> FleurRa
     root = tree.getroot()
 
     magnetism = root.find(".//magnetism")
+    if magnetism is None:
+        raise ValueError("Missing required element <magnetism> in out.xml")
     jspins = int(magnetism.get("jspins", "1"))
 
     iterations = root.findall(".//iteration")
@@ -232,6 +132,8 @@ def parse_fleur_outxml(filepath: str | Path, iteration: str = "last") -> FleurRa
     selected_iteration = iterations[-1] if iteration == "last" else iterations[int(iteration) - 1]
 
     fermi_element = selected_iteration.find(".//FermiEnergy")
+    if fermi_element is None:
+        raise ValueError("Missing required element <FermiEnergy> in out.xml")
     fermi_htr = float(fermi_element.get("value"))
     fermi_energy = fermi_htr * HTR_TO_EV
 
@@ -312,6 +214,9 @@ class FleurOutxmlParser:
 
         Returns:
             Normalized parser output used by calculators.
+
+        Raises:
+            ValueError: If required XML elements are missing.
 
         """
         raw = parse_fleur_outxml(filepath, iteration=iteration)
