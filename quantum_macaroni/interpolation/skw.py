@@ -2,6 +2,8 @@
 
 import itertools
 from collections import deque
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -21,6 +23,19 @@ SKW_DAMPING_C1 = 0.25
 SKW_DAMPING_C2 = 0.25
 SHELL_GROUPING_RTOL = 1e-8
 SHELL_GROUPING_FLOOR = 1e-30
+LATTICE_SHAPE = (3, 3)
+LATTICE_NDIM = 2
+
+
+def _as_lattice_matrix(cell: npt.ArrayLike) -> npt.NDArray[np.float64]:
+    """Return ``cell`` as a contiguous 3x3 lattice matrix."""
+    cell_arr = np.asarray(cell, dtype=np.float64)
+    if cell_arr.shape == LATTICE_SHAPE:
+        return np.ascontiguousarray(cell_arr, dtype=np.float64)
+    if cell_arr.ndim > LATTICE_NDIM and cell_arr.shape[-LATTICE_NDIM:] == LATTICE_SHAPE:
+        lattice_stack = cell_arr.reshape(-1, *LATTICE_SHAPE)
+        return np.ascontiguousarray(lattice_stack[0], dtype=np.float64)
+    raise ValueError("cell must be a 3x3 lattice matrix or contain one")
 
 
 class SKWInterpolator:
@@ -63,8 +78,7 @@ class SKWInterpolator:
         if kpoints.shape != (self.nk, 3) or self.nk < 2:  # noqa: PLR2004
             raise ValueError("kpoints must have shape (nk, 3) with nk >= 2")
 
-        cell_arr = np.asarray(cell, dtype=np.float64)
-        lat = np.ascontiguousarray(cell_arr if cell_arr.shape == (3, 3) else np.asarray(cell[0], dtype=np.float64))
+        lat = _as_lattice_matrix(cell)
         self._lat = lat
         self._frac_to_cart_t = np.ascontiguousarray((lat / TWO_PI).T, dtype=np.float64)
         self._recip_metric = (TWO_PI * TWO_PI) * np.linalg.inv(lat @ lat.T)
@@ -139,6 +153,67 @@ class SKWInterpolator:
 
         evals_pred = np.einsum("sbr,kr->skb", self._coeffs, sk).real
         self.mae = np.abs(eigenvalues - evals_pred).mean()
+
+    def to_state(self) -> tuple[dict[str, Any], dict[str, npt.NDArray[np.generic]]]:
+        """Return metadata and arrays needed to restore this fitted interpolator.
+
+        Returns:
+            Tuple ``(metadata, arrays)`` suitable for checkpoint persistence.
+
+        """
+        metadata = {
+            "nspin": self.nspin,
+            "nk": self.nk,
+            "nbands": self.nbands,
+            "nr": self.nr,
+            "npg": self._npg,
+            "mae": float(self.mae),
+        }
+        arrays: dict[str, npt.NDArray[np.generic]] = {
+            "lat": self._lat,
+            "frac_to_cart_t": self._frac_to_cart_t,
+            "recip_metric": self._recip_metric,
+            "pg": self._pg,
+            "rpts": self._rpts,
+            "rot_rpts": self._rot_rpts,
+            "rot_rpts_flat": self._rot_rpts_flat,
+            "coeffs": self._coeffs,
+        }
+        return metadata, arrays
+
+    @classmethod
+    def from_state(
+        cls, metadata: Mapping[str, Any], arrays: Mapping[str, npt.NDArray[np.generic]]
+    ) -> "SKWInterpolator":
+        """Restore a fitted interpolator from checkpoint state.
+
+        Args:
+            metadata: Small scalar attributes produced by :meth:`to_state`.
+            arrays: Numerical arrays produced by :meth:`to_state`.
+
+        Returns:
+            Restored interpolator ready for evaluation.
+
+        Raises:
+            KeyError: If required metadata or arrays are missing.
+
+        """
+        restored = cls.__new__(cls)
+        restored.nspin = int(metadata["nspin"])
+        restored.nk = int(metadata["nk"])
+        restored.nbands = int(metadata["nbands"])
+        restored.nr = int(metadata["nr"])
+        restored._npg = int(metadata["npg"])
+        restored.mae = float(metadata["mae"])
+        restored._lat = np.ascontiguousarray(arrays["lat"], dtype=np.float64)
+        restored._frac_to_cart_t = np.ascontiguousarray(arrays["frac_to_cart_t"], dtype=np.float64)
+        restored._recip_metric = np.ascontiguousarray(arrays["recip_metric"], dtype=np.float64)
+        restored._pg = np.ascontiguousarray(arrays["pg"], dtype=np.int64)
+        restored._rpts = np.ascontiguousarray(arrays["rpts"], dtype=int)
+        restored._rot_rpts = np.ascontiguousarray(arrays["rot_rpts"], dtype=np.float64)
+        restored._rot_rpts_flat = np.ascontiguousarray(arrays["rot_rpts_flat"], dtype=np.float64)
+        restored._coeffs = np.ascontiguousarray(arrays["coeffs"], dtype=np.complex128)
+        return restored
 
     def _find_stars(
         self,

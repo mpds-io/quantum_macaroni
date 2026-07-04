@@ -11,6 +11,7 @@ import numpy as np
 from quantum_macaroni import available_calculators, available_parsers, calculate_spin_polarized_transport
 
 GRID_SPEC_LEN = 3
+DEFAULT_CHECKPOINT_PATH = "transport_state.npz"
 
 
 def _parse_scalar_or_grid(values: list[float], name: str) -> float | np.ndarray:
@@ -87,6 +88,21 @@ def _build_parser() -> argparse.ArgumentParser:
         default="transport_results.json",
         help="Output JSON file path",
     )
+    parser.add_argument(
+        "--checkpoint",
+        default=DEFAULT_CHECKPOINT_PATH,
+        help=f"Restartable .npz checkpoint path (default: {DEFAULT_CHECKPOINT_PATH})",
+    )
+    parser.add_argument(
+        "--no-checkpoint",
+        action="store_true",
+        help="Disable checkpoint writing and resume for this run",
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Ignore an existing checkpoint and overwrite it as the run progresses",
+    )
     return parser
 
 
@@ -130,6 +146,8 @@ def main() -> None:
         chunk_size=args.chunk_size,
         parser=args.parser,
         calculator=args.calculator,
+        checkpoint_path=None if args.no_checkpoint else args.checkpoint,
+        resume_checkpoint=not args.no_resume,
     )
 
     json_payload = _to_jsonable(result)
