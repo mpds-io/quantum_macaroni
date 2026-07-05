@@ -1,6 +1,6 @@
-# quantum_macaroni
+# Quantum Macaroni ⚛️🍝
 
-quantum_macaroni is a modular Boltzmann-transport workflow for electronic-structure data.
+This toolbox is a modular Boltzmann-transport workflow for post-processing the electronic-structure data.
 
 Current pipeline:
 - Parser plugins for electronic-structure outputs (default parser: Fleur out.xml).
@@ -8,7 +8,8 @@ Current pipeline:
 - Tetrahedron k-space integration mesh.
 - Transport-property calculators (default: Boltzmann transport calculator).
 
-## Features
+
+### Features
 
 - Plugin architecture for parsers and calculators.
 - Transport tensors and isotropic averages.
@@ -17,23 +18,20 @@ Current pipeline:
 - Restartable checkpoints for parsed input, fitted interpolation, transport DOS, and completed scans.
 - CLI interface with JSON output.
 
-## Requirements
 
-- Python 3.11+
-- Core dependencies:
-	- ase
-	- lxml
-	- numba
-	- numpy
-	- scipy
+### Requirements
 
-Dependencies are defined in [pyproject.toml](pyproject.toml).
+- Python 3.11+:
+- ase
+- lxml
+- numba
+- numpy
+- scipy
+
 
 ## Installation
 
-Use your preferred environment manager.
-
-Example with pip:
+Use your preferred environment manager. An example with pip reads:
 
 ```bash
 python -m venv .venv
@@ -41,11 +39,10 @@ source .venv/bin/activate
 pip install -e .
 ```
 
+
 ## Quick Start (CLI)
 
-Main entry point is [main.py](main.py).
-
-Minimal run:
+Main entry point is [main.py](main.py). Minimal run:
 
 ```bash
 python main.py examples/PbTe-nospin/out-nospin.xml
@@ -67,6 +64,7 @@ python main.py examples/PbTe-nospin/out-nospin.xml \
 	--output transport_results.json
 ```
 
+
 ### CLI Argument Rules for Temperature and Chemical Potential
 
 Both arguments accept either:
@@ -81,9 +79,10 @@ Examples:
 
 For three-number form, the third value must be a positive integer (number of points).
 
+
 ## CLI Reference
 
-```text
+```
 python main.py FILEPATH [options]
 
 Options:
@@ -119,9 +118,9 @@ Checkpoints are compressed NumPy archives with a JSON manifest and non-object Nu
 
 ## Output JSON Format
 
-The CLI stores calculation output to a JSON file (default: transport_results.json).
+The CLI stores calculation output to a JSON file (default: `transport_results.json`).
 
-When chemical potential is provided, structure is:
+If a chemical potential is provided, its structure is:
 
 ```json
 {
@@ -154,7 +153,7 @@ When chemical potential is provided, structure is:
 }
 ```
 
-Note: JSON keys are strings, so numeric keys for chemical potential and temperature are serialized as strings.
+NB: since JSON keys must be strings, the numeric keys for chemical potential and temperature are serialized.
 
 ## Python API
 
@@ -217,7 +216,7 @@ For a complete run-save-restart-branch workflow, see [examples/checkpoint_branch
 python -m examples.checkpoint_branching --checkpoint /tmp/quantum_macaroni_branching_example.npz
 ```
 
-## Project Layout
+### File Layout
 
 ```text
 quantum_macaroni/
@@ -229,5 +228,5 @@ quantum_macaroni/
 	parsers/          parser interfaces and implementations
 examples/
 	PbTe-nospin/      sample input and usage script
-main.py             CLI entry point
+main.py               CLI entry point
 ```

@@ -1,4 +1,4 @@
-"""Backward-compatible facade exposing historical imports from modular internals."""
+"""Backward-compatible facade exposing imports from modular internals."""
 
 import sys
 from pathlib import Path
