@@ -1,21 +1,27 @@
 """Backward-compatible facade exposing historical imports from modular internals."""
 
+import sys
+from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
 
-from quantum_macaroni.calculators.transport import (
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from quantum_macaroni.calculators.transport import (  # noqa: E402
     BoltzmannTransportCalculator,
     calculate_spin_polarized_transport,
 )
-from quantum_macaroni.interpolation import SKWInterpolator
-from quantum_macaroni.mesh import TetrahedronMesh
-from quantum_macaroni.parsers.fleur_outxml import (
+from quantum_macaroni.interpolation import SKWInterpolator  # noqa: E402
+from quantum_macaroni.mesh import TetrahedronMesh  # noqa: E402
+from quantum_macaroni.parsers.fleur_outxml import (  # noqa: E402
     FleurOutxmlParser,
     parse_fleur_outxml,
     structure_from_outxml,
 )
-from quantum_macaroni.parsers.fleur_outxml import (
+from quantum_macaroni.parsers.fleur_outxml import (  # noqa: E402
     read_symops_from_outxml as _read_symops_from_outxml,
 )
 
@@ -32,9 +38,11 @@ __all__ = [
 
 
 if __name__ == "__main__":
-    default_file = "examples/PbTe-nospin/out-nospin.xml"
-    temperature = [100.0, 300.0, 600.0, 900.0]
-    chemical_potential = np.linspace(-0.5, 0.5, 11)
+    example_dir = Path(__file__).resolve().parent
+    default_file = example_dir / "out-nospin.xml"
+    checkpoint_path = example_dir / "pbte_transport_state.npz"
+    temperature = [300.0]
+    chemical_potential = np.linspace(-0.5, 0.5, 3)
     tau = 1e-14
     mesh = (96, 96, 96)
     lr_ratio = 25
@@ -42,8 +50,11 @@ if __name__ == "__main__":
     chunk_size = 4096
 
     print("=" * 60)
-    print("TEST: Non-spin-polarized PbTe (chemical potential scan)")
+    print("TEST: Non-spin-polarized PbTe (checkpointed chemical potential scan)")
     print("=" * 60)
+    print(f"  Input: {default_file}")
+    print(f"  Checkpoint: {checkpoint_path}")
+    print("  Re-run with the same settings to resume from the latest compatible checkpoint.")
     result = calculate_spin_polarized_transport(
         default_file,
         temperature=temperature,
@@ -53,6 +64,8 @@ if __name__ == "__main__":
         lr_ratio=lr_ratio,
         band_window=band_window,
         chunk_size=chunk_size,
+        checkpoint_path=checkpoint_path,
+        resume_checkpoint=True,
     )
     result_by_mu = cast(dict[float | str, Any], result)
 
