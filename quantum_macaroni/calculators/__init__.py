@@ -8,11 +8,15 @@ from quantum_macaroni.calculators.base import (
 )
 from quantum_macaroni.calculators.transport import (
     BoltzmannTransportCalculator,
+    TransportDOS,
+    TransportWorkflowStage,
     calculate_spin_polarized_transport,
 )
 
 __all__ = [
     "BoltzmannTransportCalculator",
+    "TransportDOS",
+    "TransportWorkflowStage",
     "calculate_spin_polarized_transport",
     "register_calculator",
     "get_calculator",

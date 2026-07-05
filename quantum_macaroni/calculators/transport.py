@@ -1,7 +1,9 @@
 """Boltzmann transport calculators and high-level orchestration entry point."""
 
+import hashlib
 import time
 from dataclasses import dataclass
+from enum import IntEnum
 from pathlib import Path
 from typing import Any
 
@@ -9,11 +11,25 @@ import numpy as np
 import numpy.typing as npt
 
 from quantum_macaroni.calculators.base import TransportTuple, get_calculator, register_calculator, tensor_average
+from quantum_macaroni.checkpointing import (
+    BaseSystemState,
+    Checkpoint,
+    CheckpointFormatError,
+    CheckpointManager,
+    ExecutionProgress,
+    RuntimeParameters,
+    stable_fingerprint,
+    to_json_value,
+)
+from quantum_macaroni.checkpointing.state import ArrayMap, Metadata
 from quantum_macaroni.core.constants import ANG3_TO_M3, E_CHARGE, KB_EV, TWO_PI
 from quantum_macaroni.core.numerics import nb_onsager_from_tdos_flat, nb_transport_dos_flat
 from quantum_macaroni.interpolation import SKWInterpolator
 from quantum_macaroni.mesh import TetrahedronMesh
-from quantum_macaroni.parsers import DEFAULT_PARSER, ElectronicStructureParser, get_parser
+from quantum_macaroni.parsers import DEFAULT_PARSER, ElectronicStructureParser, ParserResult, get_parser
+
+TRANSPORT_CHECKPOINT_WORKFLOW = "spin-polarized-transport"
+FILE_DIGEST_CHUNK_SIZE = 1024 * 1024
 
 
 def _validate_bound_parameter(name: str, value: float, *, allow_zero: bool = False) -> None:
@@ -40,6 +56,33 @@ class EnergyGridDefaults:
 
 
 DEFAULTS = EnergyGridDefaults()
+
+
+class TransportWorkflowStage(IntEnum):
+    """Ordered checkpoint stages for the spin-polarized transport workflow."""
+
+    PARSED = 1
+    INTERPOLATED = 2
+    TRANSPORT_DOS = 3
+    COMPLETED = 4
+
+
+@dataclass(slots=True)
+class TransportDOS:
+    """Transport density-of-states payload reused across scan integrations.
+
+    Attributes:
+        energy_grid: Energy grid in eV.
+        values: Flattened transport DOS with shape ``(ne, 9)``.
+        norm: Brillouin-zone normalization factor applied during integration.
+        kpoint_mesh: Integration mesh dimensions used to build the DOS.
+
+    """
+
+    energy_grid: npt.NDArray[np.float64]
+    values: npt.NDArray[np.float64]
+    norm: float
+    kpoint_mesh: tuple[int, int, int]
 
 
 def _onsager_to_transport(
@@ -394,17 +437,17 @@ class BoltzmannTransportCalculator:
         ne = int((e_hi - e_lo) / min_de) + 1
         return np.linspace(e_lo, e_hi, ne, dtype=np.float64)
 
-    def calculate_transport_scan(
+    def build_transport_dos(
         self,
         mu_values: npt.NDArray[np.float64],
         temperatures: npt.NDArray[np.float64],
         kpoint_mesh: tuple[int, int, int],
         kchunk: int | None = None,
-    ) -> dict[str, Any]:
-        """Compute transport tensors for all (mu, T) pairs efficiently.
+    ) -> TransportDOS:
+        """Build transport DOS once for a chemical-potential/temperature scan.
 
-        Interpolation and transport DOS are computed **once**; only the cheap
-        Onsager integration is repeated per (mu, T) pair.
+        This is the expensive restart boundary: interpolation is evaluated over
+        the full k-point mesh and converted into a transport density of states.
 
         Args:
             mu_values: Absolute chemical potential values in eV (not shifts).
@@ -413,8 +456,7 @@ class BoltzmannTransportCalculator:
             kchunk: Optional chunk size override.
 
         Returns:
-            Dictionary with keys ``"sigma"``, ``"seebeck"``, ``"kappa"``
-            (shape ``(n_mu, n_T, 3, 3)``) and ``"*_avg"`` (shape ``(n_mu, n_T)``).
+            Transport DOS payload ready for repeated scan integrations.
 
         Raises:
             RuntimeError: If tetrahedron mesh was not initialized.
@@ -449,7 +491,34 @@ class BoltzmannTransportCalculator:
         spin_factor = self._spin_degeneracy()
         tdos_total *= spin_factor
 
-        norm = self._bz_norm(mesh)
+        return TransportDOS(
+            energy_grid=e_grid,
+            values=tdos_total,
+            norm=self._bz_norm(mesh),
+            kpoint_mesh=kpoint_mesh,
+        )
+
+    def integrate_transport_dos_scan(
+        self,
+        transport_dos: TransportDOS,
+        mu_values: npt.NDArray[np.float64],
+        temperatures: npt.NDArray[np.float64],
+    ) -> dict[str, Any]:
+        """Integrate a transport DOS over all ``(mu, T)`` scan points.
+
+        Args:
+            transport_dos: Precomputed transport DOS payload.
+            mu_values: Absolute chemical potential values in eV.
+            temperatures: Temperature array in kelvin.
+
+        Returns:
+            Dictionary with keys ``"sigma"``, ``"seebeck"``, ``"kappa"``
+            (shape ``(n_mu, n_T, 3, 3)``) and ``"*_avg"`` (shape ``(n_mu, n_T)``).
+
+        """
+        e_grid = transport_dos.energy_grid
+        tdos_total = transport_dos.values
+        norm = transport_dos.norm
 
         n_mu = mu_values.shape[0]
         n_t = temperatures.shape[0]
@@ -492,6 +561,32 @@ class BoltzmannTransportCalculator:
             "kappa": kappa_all,
             "kappa_avg": kappa_avg,
         }
+
+    def calculate_transport_scan(
+        self,
+        mu_values: npt.NDArray[np.float64],
+        temperatures: npt.NDArray[np.float64],
+        kpoint_mesh: tuple[int, int, int],
+        kchunk: int | None = None,
+    ) -> dict[str, Any]:
+        """Compute transport tensors for all (mu, T) pairs efficiently.
+
+        Interpolation and transport DOS are computed **once**; only the cheap
+        Onsager integration is repeated per (mu, T) pair.
+
+        Args:
+            mu_values: Absolute chemical potential values in eV (not shifts).
+            temperatures: Temperature array in kelvin.
+            kpoint_mesh: Integration mesh dimensions.
+            kchunk: Optional chunk size override.
+
+        Returns:
+            Dictionary with keys ``"sigma"``, ``"seebeck"``, ``"kappa"``
+            (shape ``(n_mu, n_T, 3, 3)``) and ``"*_avg"`` (shape ``(n_mu, n_T)``).
+
+        """
+        transport_dos = self.build_transport_dos(mu_values, temperatures, kpoint_mesh, kchunk=kchunk)
+        return self.integrate_transport_dos_scan(transport_dos, mu_values, temperatures)
 
 
 register_calculator(BoltzmannTransportCalculator.name, BoltzmannTransportCalculator)
@@ -537,6 +632,400 @@ def _prepare_mu_shifts(chemical_potential: float | npt.ArrayLike | None) -> npt.
     return mu_shifts
 
 
+def _as_metadata(values: dict[str, Any]) -> Metadata:
+    """Normalize a dictionary into checkpoint JSON metadata."""
+    metadata = to_json_value(values)
+    if not isinstance(metadata, dict):
+        raise TypeError("checkpoint metadata must normalize to a dictionary")
+    return metadata
+
+
+def _file_digest(filepath: str | Path) -> str:
+    """Return the SHA-256 digest of an input file."""
+    digest = hashlib.sha256()
+    with Path(filepath).open("rb") as file_obj:
+        while True:
+            chunk = file_obj.read(FILE_DIGEST_CHUNK_SIZE)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _energy_grid_settings(
+    energy_window_kbt_factor: float,
+    min_energy_window: float,
+    energy_step_kbt_divisor: float,
+    min_energy_step: float,
+    low_temp_kbt_threshold: float,
+    low_temp_energy_window: float,
+    low_temp_energy_step: float,
+) -> dict[str, float]:
+    """Return checkpoint-compatible energy-grid settings."""
+    return {
+        "energy_window_kbt_factor": energy_window_kbt_factor,
+        "min_energy_window": min_energy_window,
+        "energy_step_kbt_divisor": energy_step_kbt_divisor,
+        "min_energy_step": min_energy_step,
+        "low_temp_kbt_threshold": low_temp_kbt_threshold,
+        "low_temp_energy_window": low_temp_energy_window,
+        "low_temp_energy_step": low_temp_energy_step,
+    }
+
+
+def _transport_workflow_fingerprints(
+    filepath: str | Path,
+    parser_name: str,
+    calculator: str,
+    temperatures: npt.NDArray[np.float64],
+    mu_shifts: npt.NDArray[np.float64],
+    tau: float,
+    kpoint_mesh: tuple[int, int, int],
+    lr_ratio: int,
+    band_window: tuple[float, float] | None,
+    energy_settings: dict[str, float],
+    use_mu_scan: bool,
+) -> dict[str, str]:
+    """Return staged fingerprints for checkpoint compatibility."""
+    resolved_path = Path(filepath).resolve()
+    input_fingerprint = stable_fingerprint(
+        {
+            "workflow": TRANSPORT_CHECKPOINT_WORKFLOW,
+            "stage": "input",
+            "filepath": str(resolved_path),
+            "file_sha256": _file_digest(resolved_path),
+            "parser": parser_name,
+        }
+    )
+    interpolation_fingerprint = stable_fingerprint(
+        {
+            "workflow": TRANSPORT_CHECKPOINT_WORKFLOW,
+            "stage": "interpolation",
+            "input": input_fingerprint,
+            "lr_ratio": lr_ratio,
+            "band_window": band_window,
+        }
+    )
+    tdos_fingerprint = stable_fingerprint(
+        {
+            "workflow": TRANSPORT_CHECKPOINT_WORKFLOW,
+            "stage": "transport_dos",
+            "interpolation": interpolation_fingerprint,
+            "calculator": calculator,
+            "tau": tau,
+            "kpoint_mesh": kpoint_mesh,
+            "temperatures": temperatures,
+            "mu_shifts": mu_shifts,
+            "energy_settings": energy_settings,
+        }
+    )
+    result_fingerprint = stable_fingerprint(
+        {
+            "workflow": TRANSPORT_CHECKPOINT_WORKFLOW,
+            "stage": "completed",
+            "transport_dos": tdos_fingerprint,
+            "use_mu_scan": use_mu_scan,
+        }
+    )
+    return {
+        "input": input_fingerprint,
+        "interpolation": interpolation_fingerprint,
+        "transport_dos": tdos_fingerprint,
+        "result": result_fingerprint,
+    }
+
+
+def _checkpoint_reached(checkpoint: Checkpoint, stage: TransportWorkflowStage) -> bool:
+    """Return whether a checkpoint has reached a transport workflow stage."""
+    return checkpoint.progress.step >= int(stage)
+
+
+def _checkpoint_fingerprint_matches(checkpoint: Checkpoint, name: str, expected: str) -> bool:
+    """Return whether a loaded checkpoint carries an expected staged fingerprint."""
+    fingerprints = checkpoint.runtime_parameters.values.get("fingerprints")
+    return isinstance(fingerprints, dict) and fingerprints.get(name) == expected
+
+
+def _parser_result_arrays(parsed: ParserResult) -> ArrayMap:
+    """Return checkpoint arrays for a parser result."""
+    return {
+        "parsed.kpoints": parsed.kpoints,
+        "parsed.eigenvalues": parsed.eigenvalues,
+        "parsed.lattice": parsed.lattice,
+        "parsed.symops": parsed.symops,
+    }
+
+
+def _parser_result_metadata(parsed: ParserResult) -> dict[str, Any]:
+    """Return checkpoint metadata for a parser result."""
+    return {
+        "fermi_energy": parsed.fermi_energy,
+        "jspins": parsed.jspins,
+        "nbands": parsed.nbands,
+        "nk": parsed.nk,
+    }
+
+
+def _parser_result_from_checkpoint(checkpoint: Checkpoint) -> ParserResult:
+    """Restore a parser result from checkpoint base state."""
+    parsed_metadata = checkpoint.base_system.metadata.get("parsed")
+    if not isinstance(parsed_metadata, dict):
+        raise CheckpointFormatError("checkpoint is missing parsed metadata")
+
+    arrays = checkpoint.base_system.arrays
+    return ParserResult(
+        kpoints=np.ascontiguousarray(arrays["parsed.kpoints"], dtype=np.float64),
+        eigenvalues=np.ascontiguousarray(arrays["parsed.eigenvalues"], dtype=np.float64),
+        fermi_energy=float(parsed_metadata["fermi_energy"]),
+        jspins=int(parsed_metadata["jspins"]),
+        nbands=int(parsed_metadata["nbands"]),
+        nk=int(parsed_metadata["nk"]),
+        lattice=np.ascontiguousarray(arrays["parsed.lattice"], dtype=np.float64),
+        symops=np.ascontiguousarray(arrays["parsed.symops"], dtype=int),
+    )
+
+
+def _prefix_arrays(prefix: str, arrays: dict[str, npt.NDArray[np.generic]]) -> ArrayMap:
+    """Prefix checkpoint array names with a namespace."""
+    return {f"{prefix}{name}": array for name, array in arrays.items()}
+
+
+def _unprefix_arrays(prefix: str, arrays: ArrayMap) -> ArrayMap:
+    """Return checkpoint arrays from one namespace without their prefix."""
+    return {name.removeprefix(prefix): array for name, array in arrays.items() if name.startswith(prefix)}
+
+
+def _interpolator_from_checkpoint(checkpoint: Checkpoint) -> SKWInterpolator:
+    """Restore an interpolator from checkpoint base state."""
+    metadata = checkpoint.base_system.metadata.get("interpolator")
+    if not isinstance(metadata, dict):
+        raise CheckpointFormatError("checkpoint is missing interpolator metadata")
+    return SKWInterpolator.from_state(metadata, _unprefix_arrays("skw.", checkpoint.base_system.arrays))
+
+
+def _transport_dos_arrays(transport_dos: TransportDOS) -> ArrayMap:
+    """Return checkpoint arrays for a transport DOS payload."""
+    return {
+        "tdos.energy_grid": transport_dos.energy_grid,
+        "tdos.values": transport_dos.values,
+    }
+
+
+def _transport_dos_metadata(transport_dos: TransportDOS) -> dict[str, Any]:
+    """Return checkpoint metadata for a transport DOS payload."""
+    return {
+        "norm": transport_dos.norm,
+        "kpoint_mesh": transport_dos.kpoint_mesh,
+    }
+
+
+def _transport_dos_from_checkpoint(checkpoint: Checkpoint) -> TransportDOS:
+    """Restore transport DOS from checkpoint progress state."""
+    metadata = checkpoint.progress.metadata.get("transport_dos")
+    if not isinstance(metadata, dict):
+        raise CheckpointFormatError("checkpoint is missing transport DOS metadata")
+    mesh_raw = metadata.get("kpoint_mesh")
+    if not isinstance(mesh_raw, list | tuple) or len(mesh_raw) != 3:  # noqa: PLR2004
+        raise CheckpointFormatError("checkpoint transport DOS mesh must have three dimensions")
+    arrays = checkpoint.progress.arrays
+    return TransportDOS(
+        energy_grid=np.ascontiguousarray(arrays["tdos.energy_grid"], dtype=np.float64),
+        values=np.ascontiguousarray(arrays["tdos.values"], dtype=np.float64),
+        norm=float(metadata["norm"]),
+        kpoint_mesh=(int(mesh_raw[0]), int(mesh_raw[1]), int(mesh_raw[2])),
+    )
+
+
+def _scan_result_arrays(scan: dict[str, Any]) -> ArrayMap:
+    """Return checkpoint arrays for transport scan results."""
+    return {
+        "result.sigma": scan["sigma"],
+        "result.sigma_avg": scan["sigma_avg"],
+        "result.seebeck": scan["seebeck"],
+        "result.seebeck_avg": scan["seebeck_avg"],
+        "result.kappa": scan["kappa"],
+        "result.kappa_avg": scan["kappa_avg"],
+    }
+
+
+def _scan_result_from_checkpoint(checkpoint: Checkpoint) -> dict[str, Any]:
+    """Restore scan result arrays from checkpoint progress state."""
+    arrays = checkpoint.progress.arrays
+    return {
+        "sigma": np.ascontiguousarray(arrays["result.sigma"], dtype=np.float64),
+        "sigma_avg": np.ascontiguousarray(arrays["result.sigma_avg"], dtype=np.float64),
+        "seebeck": np.ascontiguousarray(arrays["result.seebeck"], dtype=np.float64),
+        "seebeck_avg": np.ascontiguousarray(arrays["result.seebeck_avg"], dtype=np.float64),
+        "kappa": np.ascontiguousarray(arrays["result.kappa"], dtype=np.float64),
+        "kappa_avg": np.ascontiguousarray(arrays["result.kappa_avg"], dtype=np.float64),
+    }
+
+
+def _build_transport_checkpoint(
+    stage: TransportWorkflowStage,
+    fingerprints: dict[str, str],
+    runtime_config: dict[str, Any],
+    temperatures: npt.NDArray[np.float64],
+    mu_shifts: npt.NDArray[np.float64],
+    parsed: ParserResult | None = None,
+    interpolator: SKWInterpolator | None = None,
+    transport_dos: TransportDOS | None = None,
+    scan: dict[str, Any] | None = None,
+    result_metadata: dict[str, Any] | None = None,
+) -> Checkpoint:
+    """Build a generic checkpoint object for the transport workflow."""
+    base_arrays: ArrayMap = {}
+    base_metadata: dict[str, Any] = {
+        "workflow": TRANSPORT_CHECKPOINT_WORKFLOW,
+        "fingerprints": fingerprints,
+    }
+    if parsed is not None:
+        base_arrays.update(_parser_result_arrays(parsed))
+        base_metadata["parsed"] = _parser_result_metadata(parsed)
+    if interpolator is not None:
+        interpolator_metadata, interpolator_arrays = interpolator.to_state()
+        base_arrays.update(_prefix_arrays("skw.", interpolator_arrays))
+        base_metadata["interpolator"] = interpolator_metadata
+
+    progress_arrays: ArrayMap = {}
+    progress_metadata: dict[str, Any] = {
+        "stage": stage.name.lower(),
+        "fingerprints": fingerprints,
+    }
+    if transport_dos is not None:
+        progress_arrays.update(_transport_dos_arrays(transport_dos))
+        progress_metadata["transport_dos"] = _transport_dos_metadata(transport_dos)
+    if scan is not None:
+        progress_arrays.update(_scan_result_arrays(scan))
+        progress_metadata["result"] = {
+            "metadata": result_metadata or {},
+        }
+
+    runtime_parameters = RuntimeParameters(
+        values=_as_metadata(
+            {
+                "workflow": TRANSPORT_CHECKPOINT_WORKFLOW,
+                "fingerprints": fingerprints,
+                "config": runtime_config,
+            }
+        ),
+        arrays={
+            "temperatures": temperatures,
+            "mu_shifts": mu_shifts,
+        },
+    )
+    return Checkpoint(
+        base_system=BaseSystemState(
+            version=fingerprints["interpolation"],
+            arrays=base_arrays,
+            metadata=_as_metadata(base_metadata),
+        ),
+        runtime_parameters=runtime_parameters,
+        progress=ExecutionProgress(
+            step=int(stage),
+            arrays=progress_arrays,
+            metadata=_as_metadata(progress_metadata),
+        ),
+    )
+
+
+def _save_transport_checkpoint(
+    manager: CheckpointManager | None,
+    checkpoint_path: str | Path | None,
+    stage: TransportWorkflowStage,
+    fingerprints: dict[str, str],
+    runtime_config: dict[str, Any],
+    temperatures: npt.NDArray[np.float64],
+    mu_shifts: npt.NDArray[np.float64],
+    parsed: ParserResult | None = None,
+    interpolator: SKWInterpolator | None = None,
+    transport_dos: TransportDOS | None = None,
+    scan: dict[str, Any] | None = None,
+    result_metadata: dict[str, Any] | None = None,
+) -> None:
+    """Persist a transport checkpoint when checkpointing is enabled."""
+    if manager is None or checkpoint_path is None:
+        return
+    checkpoint = _build_transport_checkpoint(
+        stage,
+        fingerprints,
+        runtime_config,
+        temperatures,
+        mu_shifts,
+        parsed=parsed,
+        interpolator=interpolator,
+        transport_dos=transport_dos,
+        scan=scan,
+        result_metadata=result_metadata,
+    )
+    manager.save_checkpoint(checkpoint, checkpoint_path)
+
+
+def _load_transport_checkpoint(
+    manager: CheckpointManager | None,
+    checkpoint_path: str | Path | None,
+    resume_checkpoint: bool,
+) -> Checkpoint | None:
+    """Load a transport checkpoint when resume is enabled and the file exists."""
+    if manager is None or checkpoint_path is None or not resume_checkpoint:
+        return None
+    path = Path(checkpoint_path)
+    if not path.exists():
+        return None
+    checkpoint = manager.load_checkpoint(path)
+    workflow = checkpoint.runtime_parameters.values.get("workflow")
+    if workflow != TRANSPORT_CHECKPOINT_WORKFLOW:
+        raise CheckpointFormatError(f"checkpoint workflow {workflow!r} is not supported here")
+    return checkpoint
+
+
+def _format_temperature_scan(
+    temperatures: npt.NDArray[np.float64],
+    scan: dict[str, Any],
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Format one-Fermi-level scan arrays into the flat public result contract."""
+    return {
+        "temperature": temperatures,  # Temperature grid in K, shape: (nT,)
+        "sigma": scan["sigma"][0],  # Electrical conductivity tensor, shape: (nT, 3, 3)
+        "sigma_avg": scan["sigma_avg"][0],  # Isotropic conductivity average, shape: (nT,)
+        "seebeck": scan["seebeck"][0],  # Seebeck tensor, shape: (nT, 3, 3)
+        "seebeck_avg": scan["seebeck_avg"][0],  # Isotropic Seebeck average, shape: (nT,)
+        "kappa": scan["kappa"][0],  # Electronic thermal conductivity tensor, shape: (nT, 3, 3)
+        "kappa_avg": scan["kappa_avg"][0],  # Isotropic thermal conductivity average, shape: (nT,)
+        "units": _transport_result_units(),  # Unit map for transport outputs
+        **metadata,
+    }
+
+
+def _format_mu_scan(
+    mu_shifts: npt.NDArray[np.float64],
+    temperatures: npt.NDArray[np.float64],
+    scan: dict[str, Any],
+    metadata: dict[str, Any],
+) -> dict[float | str, Any]:
+    """Format scan arrays into the nested chemical-potential result contract."""
+    results: dict[float | str, Any] = {}
+    for imu, dmu in enumerate(mu_shifts):
+        mu_key = float(dmu)
+        t_dict: dict[float, dict[str, Any]] = {}
+        for it, temp in enumerate(temperatures):
+            t_dict[float(temp)] = {
+                "sigma": scan["sigma"][imu, it],
+                "sigma_avg": float(scan["sigma_avg"][imu, it]),
+                "seebeck": scan["seebeck"][imu, it],
+                "seebeck_avg": float(scan["seebeck_avg"][imu, it]),
+                "kappa": scan["kappa"][imu, it],
+                "kappa_avg": float(scan["kappa_avg"][imu, it]),
+            }
+        results[mu_key] = t_dict
+    results["meta"] = {
+        **metadata,
+        "units": _transport_result_units(),
+    }
+    return results
+
+
 def _compute_mu_scan(
     calc: BoltzmannTransportCalculator,
     fermi: float,
@@ -563,26 +1052,191 @@ def _compute_mu_scan(
     """
     mu_abs = fermi + mu_shifts
     scan = calc.calculate_transport_scan(mu_abs, temperatures, kpoint_mesh, kchunk=chunk_size)
+    return _format_mu_scan(mu_shifts, temperatures, scan, metadata)
 
-    results: dict[float | str, Any] = {}
-    for imu, dmu in enumerate(mu_shifts):
-        mu_key = float(dmu)
-        t_dict: dict[float, dict[str, Any]] = {}
-        for it, temp in enumerate(temperatures):
-            t_dict[float(temp)] = {
-                "sigma": scan["sigma"][imu, it],
-                "sigma_avg": float(scan["sigma_avg"][imu, it]),
-                "seebeck": scan["seebeck"][imu, it],
-                "seebeck_avg": float(scan["seebeck_avg"][imu, it]),
-                "kappa": scan["kappa"][imu, it],
-                "kappa_avg": float(scan["kappa_avg"][imu, it]),
-            }
-        results[mu_key] = t_dict
-    results["meta"] = {
-        **metadata,
-        "units": _transport_result_units(),
-    }
-    return results
+
+def _completed_result_from_checkpoint(
+    loaded_checkpoint: Checkpoint | None,
+    checkpoint_path: str | Path | None,
+    fingerprints: dict[str, str],
+    use_mu_scan: bool,
+    mu_shifts: npt.NDArray[np.float64],
+    temperatures: npt.NDArray[np.float64],
+) -> dict[str, Any] | dict[float | str, Any] | None:
+    """Return completed checkpoint results when the result fingerprint matches."""
+    if (
+        loaded_checkpoint is None
+        or not _checkpoint_reached(loaded_checkpoint, TransportWorkflowStage.COMPLETED)
+        or not _checkpoint_fingerprint_matches(loaded_checkpoint, "result", fingerprints["result"])
+    ):
+        return None
+
+    result_entry = loaded_checkpoint.progress.metadata.get("result")
+    if not isinstance(result_entry, dict) or not isinstance(result_entry.get("metadata"), dict):
+        raise CheckpointFormatError("checkpoint is missing completed result metadata")
+    scan = _scan_result_from_checkpoint(loaded_checkpoint)
+    result_metadata = dict(result_entry["metadata"])
+    print(f"Loaded completed transport result from checkpoint: {checkpoint_path}")
+    if use_mu_scan:
+        return _format_mu_scan(mu_shifts, temperatures, scan, result_metadata)
+    return _format_temperature_scan(temperatures, scan, result_metadata)
+
+
+def _load_or_parse_electronic_structure(
+    parser_obj: ElectronicStructureParser,
+    filepath: str | Path,
+    loaded_checkpoint: Checkpoint | None,
+    checkpoint_manager: CheckpointManager | None,
+    checkpoint_path: str | Path | None,
+    fingerprints: dict[str, str],
+    runtime_config: dict[str, Any],
+    temperatures: npt.NDArray[np.float64],
+    mu_shifts: npt.NDArray[np.float64],
+) -> ParserResult:
+    """Load parser state from checkpoint or parse the input file."""
+    if (
+        loaded_checkpoint is not None
+        and _checkpoint_reached(loaded_checkpoint, TransportWorkflowStage.PARSED)
+        and _checkpoint_fingerprint_matches(loaded_checkpoint, "input", fingerprints["input"])
+    ):
+        print(f"Loaded parsed state from checkpoint: {checkpoint_path}")
+        return _parser_result_from_checkpoint(loaded_checkpoint)
+
+    parsed = parser_obj.parse(filepath)
+    _save_transport_checkpoint(
+        checkpoint_manager,
+        checkpoint_path,
+        TransportWorkflowStage.PARSED,
+        fingerprints,
+        runtime_config,
+        temperatures,
+        mu_shifts,
+        parsed=parsed,
+    )
+    return parsed
+
+
+def _select_interpolation_eigenvalues(
+    parsed: ParserResult,
+    fermi: float,
+    band_window: tuple[float, float] | None,
+) -> npt.NDArray[np.float64]:
+    """Return eigenvalues after applying the optional relative band window."""
+    eigenvalues = parsed.eigenvalues
+    if band_window is None:
+        return eigenvalues
+
+    emin, emax = band_window
+    emin_abs = fermi + emin
+    emax_abs = fermi + emax
+    all_bands = eigenvalues.reshape(-1, parsed.nbands)
+    band_min = all_bands.min(axis=0)
+    band_max = all_bands.max(axis=0)
+    # Filtering bands before interpolation keeps the linear solve smaller and avoids spending
+    # most of the runtime on states that can never contribute near the chosen chemical window.
+    mask = (band_max > emin_abs) & (band_min < emax_abs)
+    indices = np.where(mask)[0]
+    if len(indices) == 0:
+        raise ValueError(f"No bands found in window [{emin}, {emax}] eV")
+    b_lo = int(indices[0])
+    b_hi = int(indices[-1]) + 1
+    print(f"  band window [{emin}, {emax}] eV -> bands {b_lo}..{b_hi - 1} ({b_hi - b_lo})")
+    return eigenvalues[:, :, b_lo:b_hi]
+
+
+def _load_or_fit_interpolator(
+    parsed: ParserResult,
+    fermi: float,
+    lr_ratio: int,
+    band_window: tuple[float, float] | None,
+    loaded_checkpoint: Checkpoint | None,
+    checkpoint_manager: CheckpointManager | None,
+    checkpoint_path: str | Path | None,
+    fingerprints: dict[str, str],
+    runtime_config: dict[str, Any],
+    temperatures: npt.NDArray[np.float64],
+    mu_shifts: npt.NDArray[np.float64],
+) -> SKWInterpolator:
+    """Load a fitted interpolator from checkpoint or fit a new one."""
+    if (
+        loaded_checkpoint is not None
+        and _checkpoint_reached(loaded_checkpoint, TransportWorkflowStage.INTERPOLATED)
+        and _checkpoint_fingerprint_matches(loaded_checkpoint, "interpolation", fingerprints["interpolation"])
+    ):
+        print(f"Loaded SKW interpolation from checkpoint: {checkpoint_path}")
+        return _interpolator_from_checkpoint(loaded_checkpoint)
+
+    eigenvalues = _select_interpolation_eigenvalues(parsed, fermi, band_window)
+    print(f"SKW interpolation (lr_ratio={lr_ratio})...")
+    t_skw = time.time()
+    interp = SKWInterpolator(
+        kpoints=parsed.kpoints,
+        eigenvalues=eigenvalues,
+        cell=parsed.lattice,
+        symops=parsed.symops,
+        time_reversal=True,
+        lr_ratio=lr_ratio,
+    )
+    print(f"  MAE = {interp.mae:.6f} eV")
+    print(f"  NR = {interp.nr}, NPG = {interp._npg}, dt = {time.time() - t_skw:.2f} s")
+    _save_transport_checkpoint(
+        checkpoint_manager,
+        checkpoint_path,
+        TransportWorkflowStage.INTERPOLATED,
+        fingerprints,
+        runtime_config,
+        temperatures,
+        mu_shifts,
+        parsed=parsed,
+        interpolator=interp,
+    )
+    return interp
+
+
+def _calculate_scan_with_checkpoint(
+    calc: Any,
+    mu_abs: npt.NDArray[np.float64],
+    temperatures: npt.NDArray[np.float64],
+    kpoint_mesh: tuple[int, int, int],
+    chunk_size: int,
+    parsed: ParserResult,
+    interp: SKWInterpolator,
+    loaded_checkpoint: Checkpoint | None,
+    checkpoint_manager: CheckpointManager | None,
+    checkpoint_path: str | Path | None,
+    fingerprints: dict[str, str],
+    runtime_config: dict[str, Any],
+    mu_shifts: npt.NDArray[np.float64],
+) -> tuple[dict[str, Any], TransportDOS | None]:
+    """Return scan arrays, using transport-DOS checkpoints when available."""
+    transport_dos: TransportDOS | None = None
+    if (
+        loaded_checkpoint is not None
+        and _checkpoint_reached(loaded_checkpoint, TransportWorkflowStage.TRANSPORT_DOS)
+        and _checkpoint_fingerprint_matches(loaded_checkpoint, "transport_dos", fingerprints["transport_dos"])
+    ):
+        transport_dos = _transport_dos_from_checkpoint(loaded_checkpoint)
+        print(f"Loaded transport DOS from checkpoint: {checkpoint_path}")
+
+    if transport_dos is None and checkpoint_manager is None:
+        return calc.calculate_transport_scan(mu_abs, temperatures, kpoint_mesh, kchunk=chunk_size), None
+
+    if transport_dos is None:
+        transport_dos = calc.build_transport_dos(mu_abs, temperatures, kpoint_mesh, kchunk=chunk_size)
+        _save_transport_checkpoint(
+            checkpoint_manager,
+            checkpoint_path,
+            TransportWorkflowStage.TRANSPORT_DOS,
+            fingerprints,
+            runtime_config,
+            temperatures,
+            mu_shifts,
+            parsed=parsed,
+            interpolator=interp,
+            transport_dos=transport_dos,
+        )
+
+    return calc.integrate_transport_dos_scan(transport_dos, mu_abs, temperatures), transport_dos
 
 
 def calculate_spin_polarized_transport(
@@ -603,6 +1257,8 @@ def calculate_spin_polarized_transport(
     low_temp_energy_step: float = DEFAULTS.low_temp_energy_step,
     parser: str | ElectronicStructureParser = DEFAULT_PARSER,
     calculator: str = "boltzmann",
+    checkpoint_path: str | Path | None = None,
+    resume_checkpoint: bool = True,
 ) -> dict[str, Any] | dict[float | str, Any]:
     """Run full parser -> interpolation -> transport workflow.
 
@@ -629,6 +1285,8 @@ def calculate_spin_polarized_transport(
         low_temp_energy_step: Energy-grid spacing used in low-temperature fallback.
         parser: Parser name or parser instance.
         calculator: Registered calculator name.
+        checkpoint_path: Optional ``.npz`` checkpoint path used to persist and resume workflow state.
+        resume_checkpoint: Whether to resume from ``checkpoint_path`` when it already exists.
 
     Returns:
         When *chemical_potential* is *None*: dictionary with tensors and metadata
@@ -647,50 +1305,99 @@ def calculate_spin_polarized_transport(
 
     """
     parser_obj = get_parser(parser) if isinstance(parser, str) else parser
-
     calculator_cls = get_calculator(calculator)
-
     filepath = str(filepath)
-    parsed = parser_obj.parse(filepath)
-    fermi = parsed.fermi_energy
-    eigenvalues = parsed.eigenvalues
-
-    if band_window is not None:
-        emin, emax = band_window
-        emin_abs = fermi + emin
-        emax_abs = fermi + emax
-        all_bands = eigenvalues.reshape(-1, parsed.nbands)
-        band_min = all_bands.min(axis=0)
-        band_max = all_bands.max(axis=0)
-        # Filtering bands before interpolation keeps the linear solve smaller and avoids spending
-        # most of the runtime on states that can never contribute near the chosen chemical window.
-        mask = (band_max > emin_abs) & (band_min < emax_abs)
-        indices = np.where(mask)[0]
-        if len(indices) == 0:
-            raise ValueError(f"No bands found in window [{emin}, {emax}] eV")
-        b_lo = int(indices[0])
-        b_hi = int(indices[-1]) + 1
-        eigenvalues = eigenvalues[:, :, b_lo:b_hi]
-        print(f"  band window [{emin}, {emax}] eV -> bands {b_lo}..{b_hi - 1} ({b_hi - b_lo})")
-
-    print(f"SKW interpolation (lr_ratio={lr_ratio})...")
-    t_skw = time.time()
-    interp = SKWInterpolator(
-        kpoints=parsed.kpoints,
-        eigenvalues=eigenvalues,
-        cell=parsed.lattice,
-        symops=parsed.symops,
-        time_reversal=True,
-        lr_ratio=lr_ratio,
-    )
-    print(f"  MAE = {interp.mae:.6f} eV")
-    print(f"  NR = {interp.nr}, NPG = {interp._npg}, dt = {time.time() - t_skw:.2f} s")
-
     temperatures = _prepare_temperature_array(temperature)
 
     # --- chemical potential grid -------------------------------------------
     use_mu_scan = chemical_potential is not None
     mu_shifts = _prepare_mu_shifts(chemical_potential) if use_mu_scan else np.array([0.0], dtype=np.float64)
+
+    energy_settings = _energy_grid_settings(
+        energy_window_kbt_factor,
+        min_energy_window,
+        energy_step_kbt_divisor,
+        min_energy_step,
+        low_temp_kbt_threshold,
+        low_temp_energy_window,
+        low_temp_energy_step,
+    )
+    runtime_config: dict[str, Any] = {
+        "filepath": str(Path(filepath).resolve()),
+        "parser": parser_obj.name,
+        "calculator": calculator,
+        "tau": tau,
+        "kpoint_mesh": kpoint_mesh,
+        "lr_ratio": lr_ratio,
+        "band_window": band_window,
+        "chunk_size": chunk_size,
+        "use_mu_scan": use_mu_scan,
+        "energy_settings": energy_settings,
+    }
+    checkpoint_manager = CheckpointManager() if checkpoint_path is not None else None
+    fingerprints = (
+        _transport_workflow_fingerprints(
+            filepath,
+            parser_obj.name,
+            calculator,
+            temperatures,
+            mu_shifts,
+            tau,
+            kpoint_mesh,
+            lr_ratio,
+            band_window,
+            energy_settings,
+            use_mu_scan,
+        )
+        if checkpoint_manager is not None
+        else {}
+    )
+    loaded_checkpoint = _load_transport_checkpoint(checkpoint_manager, checkpoint_path, resume_checkpoint)
+
+    completed_result = _completed_result_from_checkpoint(
+        loaded_checkpoint,
+        checkpoint_path,
+        fingerprints,
+        use_mu_scan,
+        mu_shifts,
+        temperatures,
+    )
+    if completed_result is not None:
+        return completed_result
+
+    parsed = _load_or_parse_electronic_structure(
+        parser_obj,
+        filepath,
+        loaded_checkpoint,
+        checkpoint_manager,
+        checkpoint_path,
+        fingerprints,
+        runtime_config,
+        temperatures,
+        mu_shifts,
+    )
+
+    fermi = parsed.fermi_energy
+    metadata = {
+        "fermi_energy": fermi,
+        "jspins": parsed.jspins,
+        "parser": parser_obj.name,
+        "calculator": calculator,
+    }
+
+    interp = _load_or_fit_interpolator(
+        parsed,
+        fermi,
+        lr_ratio,
+        band_window,
+        loaded_checkpoint,
+        checkpoint_manager,
+        checkpoint_path,
+        fingerprints,
+        runtime_config,
+        temperatures,
+        mu_shifts,
+    )
 
     print(
         f"Transport (mesh={kpoint_mesh}, T={temperature} K, tau={tau:.1e} s, "
@@ -699,7 +1406,7 @@ def calculate_spin_polarized_transport(
     if use_mu_scan:
         print(f"  Chemical potential shifts: {mu_shifts} eV relative to E_Fermi={fermi:.4f} eV")
 
-    calc = calculator_cls(
+    calc: Any = calculator_cls(
         interp,
         tau=tau,
         chunk_size=chunk_size,
@@ -712,29 +1419,37 @@ def calculate_spin_polarized_transport(
         low_temp_energy_step=low_temp_energy_step,
     )
 
-    metadata = {
-        "fermi_energy": fermi,
-        "jspins": parsed.jspins,
-        "parser": parser_obj.name,
-        "calculator": calculator,
-    }
+    scan, transport_dos = _calculate_scan_with_checkpoint(
+        calc,
+        fermi + mu_shifts,
+        temperatures,
+        kpoint_mesh,
+        chunk_size,
+        parsed,
+        interp,
+        loaded_checkpoint,
+        checkpoint_manager,
+        checkpoint_path,
+        fingerprints,
+        runtime_config,
+        mu_shifts,
+    )
+
+    _save_transport_checkpoint(
+        checkpoint_manager,
+        checkpoint_path,
+        TransportWorkflowStage.COMPLETED,
+        fingerprints,
+        runtime_config,
+        temperatures,
+        mu_shifts,
+        parsed=parsed,
+        interpolator=interp,
+        transport_dos=transport_dos,
+        scan=scan,
+        result_metadata=metadata,
+    )
 
     if use_mu_scan:
-        return _compute_mu_scan(calc, fermi, mu_shifts, temperatures, kpoint_mesh, chunk_size, metadata)
-
-    fermi_arr = np.array([fermi], dtype=np.float64)
-    scan = calc.calculate_transport_scan(fermi_arr, temperatures, kpoint_mesh, kchunk=chunk_size)
-
-    results = {
-        "temperature": temperatures,  # Temperature grid in K, shape: (nT,)
-        "sigma": scan["sigma"][0],  # Electrical conductivity tensor, shape: (nT, 3, 3)
-        "sigma_avg": scan["sigma_avg"][0],  # Isotropic conductivity average, shape: (nT,)
-        "seebeck": scan["seebeck"][0],  # Seebeck tensor, shape: (nT, 3, 3)
-        "seebeck_avg": scan["seebeck_avg"][0],  # Isotropic Seebeck average, shape: (nT,)
-        "kappa": scan["kappa"][0],  # Electronic thermal conductivity tensor, shape: (nT, 3, 3)
-        "kappa_avg": scan["kappa_avg"][0],  # Isotropic thermal conductivity average, shape: (nT,)
-        "units": _transport_result_units(),  # Unit map for transport outputs
-        **metadata,
-    }
-
-    return results
+        return _format_mu_scan(mu_shifts, temperatures, scan, metadata)
+    return _format_temperature_scan(temperatures, scan, metadata)
