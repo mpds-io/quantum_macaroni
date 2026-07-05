@@ -1,6 +1,6 @@
 [project]
 name = "quantum_macaroni"
-version = "0.0.1"
+version = "0.0.2"
 description = "A toolbox for post-processing the electronic-structure data and calculation of Seebeck coefficient and electron conductivity"
 readme = "README.md"
 authors = [{name = "Anton Domnin", email = "a.v.daomnin@gmail.com"},]
@@ -23,6 +23,8 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Framework :: AiiDA",
 ]
 
