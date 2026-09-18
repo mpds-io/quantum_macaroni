@@ -3,7 +3,7 @@
 This toolbox is a modular Boltzmann-transport workflow for post-processing the electronic-structure data.
 
 Current pipeline:
-- Parser plugins for electronic-structure outputs (default parser: Fleur out.xml).
+- Parser plugins for FLEUR out.xml and CRYSTAL outp electronic-structure outputs (default: FLEUR).
 - SKW interpolation of band energies.
 - Tetrahedron k-space integration mesh.
 - Transport-property calculators (default: Boltzmann transport calculator).
@@ -47,6 +47,37 @@ Main entry point is [main.py](main.py). Minimal run:
 ```bash
 python main.py examples/PbTe-nospin/out-nospin.xml
 ```
+
+For CRYSTAL properties output, select the `crystal-outp` parser:
+
+```bash
+python main.py examples/outp/mno2afm.outp --parser crystal-outp
+```
+
+The properties file must include direct lattice vectors (`COORPRT`), Cartesian
+symmetry matrices (`SYMMOPS`), a k-point coordinate table, eigenvalues, and a numeric
+Fermi energy. Alpha and beta eigenvalues are kept as two spin channels, including
+AFM systems with zero total spin. Non-spin-polarized output is read as one channel;
+the transport calculator supplies its factor of two for spin degeneracy. The parser
+converts atomic-unit energies to eV and uses the printed Fermi energy as the reference
+for chemical-potential shifts. It accepts one properties dataset per file.
+
+E and T symmetry labels are handled as two- and three-state multiplets. When
+the file prints one energy per multiplet, the parser expands it into two or three
+band entries before interpolation. When each component is already printed,
+it retains those entries without multiplying them again. `NUMBER OF AO` resolves
+the encoding; otherwise it must be unambiguous from band counts across k-points.
+Ambiguous or inconsistent counts raise an error instead of guessing. This orbital
+multiplicity is separate from spin degeneracy.
+
+The same parser is available in Python as `CrystalOutpParser()` or through
+`calculate_spin_polarized_transport(path, parser="crystal-outp")`.
+
+The supplied AFM example prints a Fermi energy of -1 Hartree (about -27.21 eV)
+and reports `SPIN LOCKING: NO ENERGY GAP COMPUTED`. This value is preserved;
+choose chemical-potential shifts using your intended transport reference. Empty
+transport windows produce zero tensors. For singular conductivity tensors,
+Seebeck components in nonconducting directions are reported as zero by convention.
 
 By default, the CLI writes restartable checkpoint state to `transport_state.npz`
 and resumes from it on later compatible runs.
