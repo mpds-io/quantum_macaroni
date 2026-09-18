@@ -101,9 +101,16 @@ def _onsager_to_transport(
 
     Returns:
         Tuple ``(sigma, seebeck, kappa)`` of 3x3 transport tensors.
+        For singular L0, the inverse is projected onto conducting directions;
+        Seebeck components in null directions are reported as zero by convention.
 
     """
-    l0_inv = np.linalg.inv(l0)
+    try:
+        l0_inv = np.linalg.inv(l0)
+    except np.linalg.LinAlgError:
+        # Gapped energy windows and inactive transport directions can make L0
+        # singular. Project onto the conducting directions, leaving null ones zero.
+        l0_inv = np.linalg.pinv(l0, hermitian=True)
     # The moment integrals use eV as their energy unit. Only one factor
     # of the elementary charge is needed for sigma and kappa, and no charge
     # factor is needed for Seebeck because eV per elementary charge is a volt.

@@ -23,6 +23,7 @@ from quantum_macaroni.interpolation import SKWInterpolator
 from quantum_macaroni.mesh import TetrahedronMesh
 from quantum_macaroni.parsers import (
     DEFAULT_PARSER,
+    CrystalOutpParser,
     FleurOutxmlParser,
     available_parsers,
     get_parser,
@@ -45,6 +46,7 @@ __all__ = [
     "TransportWorkflowStage",
     "calculate_spin_polarized_transport",
     "FleurOutxmlParser",
+    "CrystalOutpParser",
     "DEFAULT_PARSER",
     "register_parser",
     "get_parser",
