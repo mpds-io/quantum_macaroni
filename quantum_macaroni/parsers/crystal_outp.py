@@ -14,6 +14,7 @@ _COORDS = r"\(\s*([+-]?\d+)\s+([+-]?\d+)\s+([+-]?\d+)\s*\)"
 _KPOINT = re.compile(r"(\d+)-[RC]\s*" + _COORDS)
 _EIGENVALUES = re.compile(r"EIGENVALUES\s*-\s*K\s*=\s*(\d+)\s*" + _COORDS)
 _SPIN = re.compile(r"^\s*(ALPHA|BETA)\s+ELECTRONS\s*$")
+_BAND_ENTRY = re.compile(rf"({_NUMBER})(?:\s*\(\s*([^)]*?)\s*\))?")
 _MATRIX_SIZE = 3
 _SYMMETRY_ROW_SIZE = 4
 _MIN_LATTICE_VOLUME = 1e-12
@@ -25,6 +26,56 @@ def _numbers(line: str) -> list[float]:
     if not cleaned or re.fullmatch(rf"{_NUMBER}(?:\s+{_NUMBER})*", cleaned) is None:
         return []
     return [float(token.replace("D", "E").replace("d", "e")) for token in cleaned.split()]
+
+
+def _eigenvalue_entries(line: str) -> list[tuple[float, str]]:
+    """Read band energies together with their optional symmetry labels."""
+    if not line.strip() or _BAND_ENTRY.sub("", line).strip():
+        return []
+    return [
+        (float(match.group(1).replace("D", "E").replace("d", "e")), (match.group(2) or "").strip())
+        for match in _BAND_ENTRY.finditer(line)
+    ]
+
+
+def _multiplicity(label: str) -> int:
+    """Return the dimension of an E or T irreducible representation."""
+    if label.startswith("E"):
+        return 2
+    if label.startswith("T"):
+        return 3
+    return 1
+
+
+def _expand_multiplets(
+    lines: list[str], channels: dict[str, dict[int, list[tuple[float, str]]]]
+) -> dict[str, dict[int, list[float]]]:
+    """Restore compressed multiplets without multiplying separately printed states."""
+    blocks = [entries for channel in channels.values() for entries in channel.values()]
+    raw_sizes = {len(entries) for entries in blocks}
+    expanded_sizes = {sum(_multiplicity(label) for _, label in entries) for entries in blocks}
+    expand = False
+    if raw_sizes != expanded_sizes:
+        counts = re.findall(r"NUMBER OF AO\s+(\d+)", "\n".join(lines))
+        if counts:
+            expected_size = {int(counts[-1])}
+            if raw_sizes == expected_size:
+                expand = False
+            elif expanded_sizes == expected_size:
+                expand = True
+            else:
+                raise ValueError("E/T band counts do not match NUMBER OF AO in CRYSTAL outp")
+        elif len(expanded_sizes) == 1 and len(raw_sizes) != 1:
+            expand = True
+        elif len(raw_sizes) != 1 or len(expanded_sizes) == 1:
+            raise ValueError("Ambiguous or inconsistent E/T multiplicities in CRYSTAL outp; NUMBER OF AO is required")
+    return {
+        spin: {
+            key: [energy for energy, label in entries for _ in range(_multiplicity(label) if expand else 1)]
+            for key, entries in channel.items()
+        }
+        for spin, channel in channels.items()
+    }
 
 
 def _lattice(lines: list[str]) -> npt.NDArray[np.float64]:
@@ -108,11 +159,13 @@ def _kpoints(lines: list[str]) -> tuple[int, dict[int, tuple[int, int, int]]]:
     return int(factor_match.group(1)), points
 
 
-def _band_blocks(lines: list[str], points: dict[int, tuple[int, int, int]]) -> dict[str, dict[int, list[float]]]:
+def _band_blocks(
+    lines: list[str], points: dict[int, tuple[int, int, int]]
+) -> dict[str, dict[int, list[tuple[float, str]]]]:
     """Read eigenvalue blocks keyed by spin label and k-point ID."""
-    channels: dict[str, dict[int, list[float]]] = {}
+    channels: dict[str, dict[int, list[tuple[float, str]]]] = {}
     spin = "restricted"
-    values: list[float] | None = None
+    values: list[tuple[float, str]] | None = None
     for line in lines:
         spin_match = _SPIN.match(line)
         point_match = _EIGENVALUES.search(line)
@@ -131,7 +184,7 @@ def _band_blocks(lines: list[str], points: dict[int, tuple[int, int, int]]) -> d
             values = []
             channel[point_id] = values
         elif values is not None:
-            row = _numbers(line)
+            row = _eigenvalue_entries(line)
             if row:
                 values.extend(row)
             else:
@@ -150,10 +203,13 @@ def _bands(lines: list[str], points: dict[int, tuple[int, int, int]]) -> npt.NDA
     for channel in channels.values():
         if set(channel) != set(points):
             raise ValueError("Incomplete k-point eigenvalues in CRYSTAL outp spin channel")
-    sizes = {len(values) for channel in channels.values() for values in channel.values()}
+    expanded_channels = _expand_multiplets(lines, channels)
+    sizes = {len(values) for channel in expanded_channels.values() for values in channel.values()}
     if len(sizes) != 1 or 0 in sizes:
         raise ValueError("Empty or inconsistent band counts in CRYSTAL outp")
-    energies = np.array([[channels[spin][key] for key in sorted(points)] for spin in expected], dtype=np.float64)
+    energies = np.array(
+        [[expanded_channels[spin][key] for key in sorted(points)] for spin in expected], dtype=np.float64
+    )
     if not np.isfinite(energies).all():
         raise ValueError("Non-finite eigenvalues in CRYSTAL outp")
     return np.ascontiguousarray(energies * HTR_TO_EV)
@@ -186,6 +242,8 @@ class CrystalOutpParser:
             Fractional k-points, energies in eV, lattice in angstrom, and symmetries.
             AFM alpha and beta blocks remain separate spin channels. Restricted
             output has one channel; transport supplies its spin degeneracy.
+            Compressed E/T multiplets are expanded into two/three bands. The AO
+            count distinguishes these from separately printed components.
 
         Raises:
             ValueError: If the dataset is incomplete, inconsistent, or unsupported.

@@ -39,6 +39,14 @@ _BETA = """ EIGENVALUES - K= 2 ( -1 1 0)
  -1.9E-01(Ag ) -0.9E-01(B1u) 2.1E-01(Ag )
 
 """
+_MULTIPLETS = """ EIGENVALUES - K= 1 ( 0 0 0)
+ -2.0D-01(Ag ) -1.0E-01(Eg )
+ +2.0E-01(T1u)
+
+ EIGENVALUES - K= 2 ( -1 1 0)
+ -1.8E-01 -1.1E-01 -0.9E-01 1.8E-01 2.0E-01 2.2E-01
+
+"""
 
 
 def _write_outp(tmp_path: Path, content: str) -> Path:
@@ -78,6 +86,69 @@ def test_channels_and_units(tmp_path: Path, polarized: bool) -> None:
     np.testing.assert_array_equal(parsed.symops, [np.eye(3, dtype=int), -np.eye(3, dtype=int)])
     if polarized:
         np.testing.assert_allclose(parsed.eigenvalues[1] / HTR_TO_EV, [[-0.19, -0.09, 0.21], [-0.17, -0.07, 0.23]])
+
+
+@pytest.mark.parametrize("polarized", [False, True])
+@pytest.mark.parametrize("with_ao_count", [False, True])
+def test_compressed_multiplets(tmp_path: Path, polarized: bool, with_ao_count: bool) -> None:
+    """Expand E/T states while keeping their split branches aligned at other points."""
+    header = _HEADER + ("NUMBER OF AO 6\n" if with_ao_count else "")
+    blocks = "ALPHA ELECTRONS\n" + _MULTIPLETS + "BETA ELECTRONS\n" + _MULTIPLETS if polarized else _MULTIPLETS
+    parsed = CrystalOutpParser().parse(_write_outp(tmp_path, header + blocks))
+    assert parsed.eigenvalues.shape == (2 if polarized else 1, 2, 6)
+    assert parsed.nbands == 6  # noqa: PLR2004
+    for channel in parsed.eigenvalues:
+        np.testing.assert_allclose(channel[0] / HTR_TO_EV, [-0.2, -0.1, -0.1, 0.2, 0.2, 0.2])
+        np.testing.assert_allclose(channel[1] / HTR_TO_EV, [-0.18, -0.11, -0.09, 0.18, 0.2, 0.22])
+
+
+@pytest.mark.parametrize(("e_label", "t_label"), [("E", "T"), ("Eu", "T2g"), ("E1g", "T2u"), ("E'", "T1g")])
+def test_multiplet_labels(tmp_path: Path, e_label: str, t_label: str) -> None:
+    """Read common suffixes without confusing irrep labels with Fortran exponents."""
+    blocks = _MULTIPLETS.replace("Eg ", e_label).replace("T1u", t_label)
+    parsed = CrystalOutpParser().parse(_write_outp(tmp_path, _HEADER + "NUMBER OF AO 6\n" + blocks))
+    np.testing.assert_allclose(parsed.eigenvalues[0, 0] / HTR_TO_EV, [-0.2, -0.1, -0.1, 0.2, 0.2, 0.2])
+
+
+@pytest.mark.parametrize("with_ao_count", [False, True])
+def test_separately_printed_components(tmp_path: Path, with_ao_count: bool) -> None:
+    """Avoid counting already expanded E/T components a second time."""
+    blocks = _MULTIPLETS.replace("-1.0E-01(Eg )", "-1.0E-01(Eg ) -1.0E-01(Eg )")
+    blocks = blocks.replace("+2.0E-01(T1u)", "+2.0E-01(T1u) +2.0E-01(T1u) +2.0E-01(T1u)")
+    header = _HEADER + ("NUMBER OF AO 6\n" if with_ao_count else "")
+    parsed = CrystalOutpParser().parse(_write_outp(tmp_path, header + blocks))
+    assert parsed.eigenvalues.shape == (1, 2, 6)
+    np.testing.assert_allclose(parsed.eigenvalues[0, 0] / HTR_TO_EV, [-0.2, -0.1, -0.1, 0.2, 0.2, 0.2])
+
+
+def test_distinct_multiplets_at_equal_energy(tmp_path: Path) -> None:
+    """Preserve accidentally equal E multiplets as four independent states."""
+    blocks = _MULTIPLETS.replace("-1.0E-01(Eg )", "-1.0E-01(Eg ) -1.0E-01(Eu )")
+    blocks = blocks.replace("-1.1E-01 -0.9E-01", "-1.2E-01 -1.1E-01 -0.9E-01 -0.8E-01")
+    parsed = CrystalOutpParser().parse(_write_outp(tmp_path, _HEADER + "NUMBER OF AO 8\n" + blocks))
+    assert parsed.eigenvalues.shape == (1, 2, 8)
+    np.testing.assert_allclose(parsed.eigenvalues[0, 0] / HTR_TO_EV, [-0.2, -0.1, -0.1, -0.1, -0.1, 0.2, 0.2, 0.2])
+
+
+@pytest.mark.parametrize("copies", [1, 2])
+def test_uniform_labelled_blocks(tmp_path: Path, copies: int) -> None:
+    """Use the AO count when every point has the same printed multiplet layout."""
+    row = "-2.0E-01(Ag ) " + "-1.0E-01(Eg ) " * copies + "2.0E-01(T1u) " * copies
+    blocks = f"EIGENVALUES - K= 1 (0 0 0)\n{row}\n\nEIGENVALUES - K= 2 (-1 1 0)\n{row}\n\n"
+    if copies == 2:  # noqa: PLR2004
+        blocks = blocks.replace("2.0E-01(T1u) 2.0E-01(T1u)", "2.0E-01(T1u) 2.0E-01(T1u) 2.0E-01(T1u)")
+    parsed = CrystalOutpParser().parse(_write_outp(tmp_path, _HEADER + "NUMBER OF AO 6\n" + blocks))
+    np.testing.assert_allclose(parsed.eigenvalues[0] / HTR_TO_EV, [[-0.2, -0.1, -0.1, 0.2, 0.2, 0.2]] * 2)
+
+
+@pytest.mark.parametrize("ao_count", [None, 5])
+def test_ambiguous_or_inconsistent_multiplets(tmp_path: Path, ao_count: int | None) -> None:
+    """Reject ambiguous counts rather than silently overcounting or undercounting."""
+    row = "-2.0E-01(Ag ) -1.0E-01(Eg ) 2.0E-01(T1u)"
+    blocks = f"EIGENVALUES - K= 1 (0 0 0)\n{row}\n\nEIGENVALUES - K= 2 (-1 1 0)\n{row}\n\n"
+    header = _HEADER + (f"NUMBER OF AO {ao_count}\n" if ao_count is not None else "")
+    with pytest.raises(ValueError, match="NUMBER OF AO"):
+        CrystalOutpParser().parse(_write_outp(tmp_path, header + blocks))
 
 
 def test_cartesian_symmetry_conversion(tmp_path: Path) -> None:
