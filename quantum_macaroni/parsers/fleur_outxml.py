@@ -79,7 +79,7 @@ def structure_from_outxml(
     if bravais is None:
         raise ValueError("No <bravaisMatrix> found")
 
-    rows = [[float(x) for x in bravais.find(name).text.split()] for name in ["row-1", "row-2", "row-3"]]
+    rows = [[float(value) for value in bravais.find(name).text.split()] for name in ["row-1", "row-2", "row-3"]]
     lattice = np.array(rows, dtype=np.float64) * BOHR_TO_ANG
     inv_lat = np.linalg.inv(lattice)
 
@@ -145,7 +145,7 @@ def parse_fleur_outxml(filepath: str | Path, iteration: str = "last") -> FleurRa
         kx = float(node.get("k_x"))
         ky = float(node.get("k_y"))
         kz = float(node.get("k_z"))
-        values = np.array([float(x) * HTR_TO_EV for x in node.text.split()], dtype=np.float64)
+        values = np.array([float(value) * HTR_TO_EV for value in node.text.split()], dtype=np.float64)
 
         if spin not in data_by_spin:
             data_by_spin[spin] = {}
@@ -195,7 +195,7 @@ def read_symops_from_outxml(filepath: str | Path) -> npt.NDArray[np.int_]:
         for name in ["row-1", "row-2", "row-3"]:
             row = symop.find(name)
             parts = row.text.split()
-            rows.append([int(float(x)) for x in parts[:3]])
+            rows.append([int(float(value)) for value in parts[:3]])
         symops.append(rows)
     return np.array(symops, dtype=int)
 

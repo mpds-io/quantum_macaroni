@@ -106,7 +106,7 @@ def _fractional_rotation(cartesian: npt.NDArray[np.float64], lattice: npt.NDArra
 
 def _symops(lines: list[str], lattice: npt.NDArray[np.float64]) -> npt.NDArray[np.int_]:
     """Convert printed Cartesian rotations to integer fractional rotations."""
-    header = next((i for i, line in enumerate(lines) if "SYMMOPS - TRANSLATORS IN ANGSTROM" in line), None)
+    header = next((index for index, line in enumerate(lines) if "SYMMOPS - TRANSLATORS IN ANGSTROM" in line), None)
     if header is None:
         raise ValueError("Missing symmetry matrices in CRYSTAL outp; enable SYMMOPS")
     count = re.search(r"(\d+)\s+SYMMOPS", lines[header])
@@ -134,7 +134,7 @@ def _symops(lines: list[str], lattice: npt.NDArray[np.float64]) -> npt.NDArray[n
 
 def _kpoints(lines: list[str]) -> tuple[int, dict[int, tuple[int, int, int]]]:
     """Read the integer k-point table and its fractional coordinate divisor."""
-    headers = [i for i, line in enumerate(lines) if "K POINTS COORDINATES" in line]
+    headers = [index for index, line in enumerate(lines) if "K POINTS COORDINATES" in line]
     if len(headers) != 1:
         raise ValueError("Expected one K POINTS COORDINATES table in CRYSTAL outp")
     header = headers[0]

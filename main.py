@@ -127,9 +127,9 @@ def _to_jsonable(value: Any) -> Any:
     """Convert nested numpy-rich results to JSON-serializable structure."""
     converted: Any = value
     if isinstance(value, dict):
-        converted = {str(k): _to_jsonable(v) for k, v in value.items()}
+        converted = {str(key): _to_jsonable(item) for key, item in value.items()}
     elif isinstance(value, (list, tuple)):
-        converted = [_to_jsonable(v) for v in value]
+        converted = [_to_jsonable(item) for item in value]
     elif isinstance(value, np.ndarray):
         converted = value.tolist()
     elif isinstance(value, np.floating):

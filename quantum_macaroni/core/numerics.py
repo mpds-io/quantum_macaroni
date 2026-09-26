@@ -34,16 +34,16 @@ def nb_occ_weights(ef: float, e1: float, e2: float, e3: float, e4: float) -> npt
         Occupation weights for four tetrahedron corners.
 
     """
-    w = np.zeros(4, dtype=np.float64)
+    weights = np.zeros(4, dtype=np.float64)
 
     if ef <= e1:
-        return w
+        return weights
     if ef >= e4:
-        w[0] = 0.25
-        w[1] = 0.25
-        w[2] = 0.25
-        w[3] = 0.25
-        return w
+        weights[0] = 0.25
+        weights[1] = 0.25
+        weights[2] = 0.25
+        weights[3] = 0.25
+        return weights
 
     eps = 1e-14
     e21 = max(e2 - e1, eps)
@@ -54,31 +54,31 @@ def nb_occ_weights(ef: float, e1: float, e2: float, e3: float, e4: float) -> npt
     e43 = max(e4 - e3, eps)
 
     if ef < e2:
-        x = ef - e1
-        c = x * x * x / (4.0 * e21 * e31 * e41)
-        w[0] = c * (4.0 - x * (1.0 / e21 + 1.0 / e31 + 1.0 / e41))
-        w[1] = c * x / e21
-        w[2] = c * x / e31
-        w[3] = c * x / e41
+        energy_span = ef - e1
+        coefficient = energy_span * energy_span * energy_span / (4.0 * e21 * e31 * e41)
+        weights[0] = coefficient * (4.0 - energy_span * (1.0 / e21 + 1.0 / e31 + 1.0 / e41))
+        weights[1] = coefficient * energy_span / e21
+        weights[2] = coefficient * energy_span / e31
+        weights[3] = coefficient * energy_span / e41
     elif ef < e3:
         c1 = (ef - e1) * (ef - e1) / (4.0 * e41 * e31)
         c2 = (ef - e1) * (ef - e2) * (e3 - ef) / (4.0 * e41 * e32 * e31)
         c3 = (ef - e2) * (ef - e2) * (e4 - ef) / (4.0 * e42 * e32 * e41)
         c12 = c1 + c2
         c123 = c12 + c3
-        w[0] = c1 + c12 * (e3 - ef) / e31 + c123 * (e4 - ef) / e41
-        w[1] = c123 + (c2 + c3) * (e3 - ef) / e32 + c3 * (e4 - ef) / e42
-        w[2] = c12 * (ef - e1) / e31 + (c2 + c3) * (ef - e2) / e32
-        w[3] = c123 * (ef - e1) / e41 + c3 * (ef - e2) / e42
+        weights[0] = c1 + c12 * (e3 - ef) / e31 + c123 * (e4 - ef) / e41
+        weights[1] = c123 + (c2 + c3) * (e3 - ef) / e32 + c3 * (e4 - ef) / e42
+        weights[2] = c12 * (ef - e1) / e31 + (c2 + c3) * (ef - e2) / e32
+        weights[3] = c123 * (ef - e1) / e41 + c3 * (ef - e2) / e42
     else:
-        x = e4 - ef
-        c = x * x * x / (4.0 * e41 * e42 * e43)
-        w[0] = 0.25 - c * x / e41
-        w[1] = 0.25 - c * x / e42
-        w[2] = 0.25 - c * x / e43
-        w[3] = 0.25 - c * (4.0 - x * (1.0 / e41 + 1.0 / e42 + 1.0 / e43))
+        energy_span = e4 - ef
+        coefficient = energy_span * energy_span * energy_span / (4.0 * e41 * e42 * e43)
+        weights[0] = 0.25 - coefficient * energy_span / e41
+        weights[1] = 0.25 - coefficient * energy_span / e42
+        weights[2] = 0.25 - coefficient * energy_span / e43
+        weights[3] = 0.25 - coefficient * (4.0 - energy_span * (1.0 / e41 + 1.0 / e42 + 1.0 / e43))
 
-    return w
+    return weights
 
 
 @_nb.njit(parallel=True, cache=True, fastmath=True)
@@ -246,9 +246,9 @@ def nb_onsager_from_tdos_flat(
 
     for ie in range(ne):
         energy = e_grid[ie]
-        x = (energy - fermi) / kbt
+        reduced_energy = (energy - fermi) / kbt
 
-        ch = math.cosh(0.5 * x)
+        ch = math.cosh(0.5 * reduced_energy)
         dfde = 1.0 / (4.0 * kbt * ch * ch)
         e_mu = energy - fermi
         w0 = dfde * de
@@ -286,23 +286,25 @@ def nb_star_batch(
     sk = np.zeros((nk, nr), dtype=np.complex128)
     inv_npg = 1.0 / npg
 
-    for k in _nb.prange(nk):  # ty:ignore[not-iterable]
-        kx = kpoints[k, 0]
-        ky = kpoints[k, 1]
-        kz = kpoints[k, 2]
+    for kpoint_index in _nb.prange(nk):  # ty:ignore[not-iterable]
+        kx = kpoints[kpoint_index, 0]
+        ky = kpoints[kpoint_index, 1]
+        kz = kpoints[kpoint_index, 2]
         for ipg in range(npg):
             base = ipg * 3 * nr
             r0_base = base
             r1_base = base + nr
             r2_base = base + 2 * nr
-            for r in range(nr):
+            for star_index in range(nr):
                 phase = TWO_PI * (
-                    kx * rot_rpts_flat[r0_base + r] + ky * rot_rpts_flat[r1_base + r] + kz * rot_rpts_flat[r2_base + r]
+                    kx * rot_rpts_flat[r0_base + star_index]
+                    + ky * rot_rpts_flat[r1_base + star_index]
+                    + kz * rot_rpts_flat[r2_base + star_index]
                 )
-                sk[k, r] += complex(math.cos(phase), math.sin(phase))
+                sk[kpoint_index, star_index] += complex(math.cos(phase), math.sin(phase))
 
-        for r in range(nr):
-            sk[k, r] *= inv_npg
+        for star_index in range(nr):
+            sk[kpoint_index, star_index] *= inv_npg
 
     return sk
 
@@ -332,31 +334,31 @@ def nb_star_and_grad_batch(
     inv_npg = 1.0 / npg
     grad_factor = complex(0.0, TWO_PI * inv_npg)
 
-    for k in _nb.prange(nk):  # ty:ignore[not-iterable]
-        kx = kpoints[k, 0]
-        ky = kpoints[k, 1]
-        kz = kpoints[k, 2]
+    for kpoint_index in _nb.prange(nk):  # ty:ignore[not-iterable]
+        kx = kpoints[kpoint_index, 0]
+        ky = kpoints[kpoint_index, 1]
+        kz = kpoints[kpoint_index, 2]
         for ipg in range(npg):
             base = ipg * 3 * nr
             r0_base = base
             r1_base = base + nr
             r2_base = base + 2 * nr
-            for r in range(nr):
-                r0 = rot_rpts_flat[r0_base + r]
-                r1 = rot_rpts_flat[r1_base + r]
-                r2 = rot_rpts_flat[r2_base + r]
+            for star_index in range(nr):
+                r0 = rot_rpts_flat[r0_base + star_index]
+                r1 = rot_rpts_flat[r1_base + star_index]
+                r2 = rot_rpts_flat[r2_base + star_index]
                 phase = TWO_PI * (kx * r0 + ky * r1 + kz * r2)
                 ph = complex(math.cos(phase), math.sin(phase))
-                sk[k, r] += ph
-                dsf[k, 0, r] += ph * r0
-                dsf[k, 1, r] += ph * r1
-                dsf[k, 2, r] += ph * r2
+                sk[kpoint_index, star_index] += ph
+                dsf[kpoint_index, 0, star_index] += ph * r0
+                dsf[kpoint_index, 1, star_index] += ph * r1
+                dsf[kpoint_index, 2, star_index] += ph * r2
 
-        for r in range(nr):
-            sk[k, r] *= inv_npg
-            dsf[k, 0, r] *= grad_factor
-            dsf[k, 1, r] *= grad_factor
-            dsf[k, 2, r] *= grad_factor
+        for star_index in range(nr):
+            sk[kpoint_index, star_index] *= inv_npg
+            dsf[kpoint_index, 0, star_index] *= grad_factor
+            dsf[kpoint_index, 1, star_index] *= grad_factor
+            dsf[kpoint_index, 2, star_index] *= grad_factor
 
     return sk, dsf
 
@@ -381,12 +383,12 @@ def nb_eval_energy_from_star(
     nk = sk.shape[0]
     out = np.empty((nbands, nk), dtype=np.float64)
 
-    for b in _nb.prange(nbands):  # ty:ignore[not-iterable]
-        for k in range(nk):
+    for band_index in _nb.prange(nbands):  # ty:ignore[not-iterable]
+        for kpoint_index in range(nk):
             total = 0.0 + 0.0j
-            for r in range(nr):
-                total += coeffs_spin[b, r] * sk[k, r]
-            out[b, k] = total.real
+            for star_index in range(nr):
+                total += coeffs_spin[band_index, star_index] * sk[kpoint_index, star_index]
+            out[band_index, kpoint_index] = total.real
 
     return out
 
@@ -427,27 +429,27 @@ def nb_eval_energy_velocity_from_star(
     f21 = frac_to_cart_t[2, 1]
     f22 = frac_to_cart_t[2, 2]
 
-    for b in _nb.prange(nbands):  # ty:ignore[not-iterable]
-        for k in range(nk):
+    for band_index in _nb.prange(nbands):  # ty:ignore[not-iterable]
+        for kpoint_index in range(nk):
             e_sum = 0.0 + 0.0j
             g0 = 0.0 + 0.0j
             g1 = 0.0 + 0.0j
             g2 = 0.0 + 0.0j
 
-            for r in range(nr):
-                coeff = coeffs_spin[b, r]
-                e_sum += coeff * sk[k, r]
-                g0 += coeff * dsf[k, 0, r]
-                g1 += coeff * dsf[k, 1, r]
-                g2 += coeff * dsf[k, 2, r]
+            for star_index in range(nr):
+                coeff = coeffs_spin[band_index, star_index]
+                e_sum += coeff * sk[kpoint_index, star_index]
+                g0 += coeff * dsf[kpoint_index, 0, star_index]
+                g1 += coeff * dsf[kpoint_index, 1, star_index]
+                g2 += coeff * dsf[kpoint_index, 2, star_index]
 
             gf0 = g0.real
             gf1 = g1.real
             gf2 = g2.real
-            e_all[b, k] = e_sum.real
+            e_all[band_index, kpoint_index] = e_sum.real
 
-            vel_all[b, k, 0] = (gf0 * f00 + gf1 * f01 + gf2 * f02) / HBAR * ANG_TO_M
-            vel_all[b, k, 1] = (gf0 * f10 + gf1 * f11 + gf2 * f12) / HBAR * ANG_TO_M
-            vel_all[b, k, 2] = (gf0 * f20 + gf1 * f21 + gf2 * f22) / HBAR * ANG_TO_M
+            vel_all[band_index, kpoint_index, 0] = (gf0 * f00 + gf1 * f01 + gf2 * f02) / HBAR * ANG_TO_M
+            vel_all[band_index, kpoint_index, 1] = (gf0 * f10 + gf1 * f11 + gf2 * f12) / HBAR * ANG_TO_M
+            vel_all[band_index, kpoint_index, 2] = (gf0 * f20 + gf1 * f21 + gf2 * f22) / HBAR * ANG_TO_M
 
     return e_all, vel_all

@@ -29,7 +29,7 @@ class TetrahedronMesh:
             mesh: Number of divisions along ``(a, b, c)`` reciprocal axes.
 
         """
-        if any(m <= 0 for m in mesh):
+        if any(dimension <= 0 for dimension in mesh):
             raise ValueError(f"mesh dimensions must be positive, got {mesh}")
 
         self.lattice = np.ascontiguousarray(np.asarray(lattice, dtype=np.float64))
@@ -41,7 +41,7 @@ class TetrahedronMesh:
 
     def _generate_kpoints(self) -> None:
         """Generate full regular fractional k-point grid."""
-        nkx, nky, nkz = [int(x) for x in self.mesh]
+        nkx, nky, nkz = [int(dimension) for dimension in self.mesh]
         ix, iy, iz = np.meshgrid(
             np.arange(nkx, dtype=np.float64),
             np.arange(nky, dtype=np.float64),
@@ -57,7 +57,7 @@ class TetrahedronMesh:
 
     def _generate_tetrahedra(self) -> None:
         """Generate tetrahedral decomposition and tetrahedron volume."""
-        nkx, nky, nkz = [int(x) for x in self.mesh]
+        nkx, nky, nkz = [int(dimension) for dimension in self.mesh]
         n_cubes = nkx * nky * nkz
 
         diagonals = np.array([[1, 1, 1], [-1, 1, 1], [1, -1, 1], [1, 1, -1]], dtype=np.float64)
@@ -80,9 +80,11 @@ class TetrahedronMesh:
         jz = (iz + 1) % nkz
 
         def flat_index(
-            x: npt.NDArray[np.int32], y: npt.NDArray[np.int32], z: npt.NDArray[np.int32]
+            x_index: npt.NDArray[np.int32],
+            y_index: npt.NDArray[np.int32],
+            z_index: npt.NDArray[np.int32],
         ) -> npt.NDArray[np.int32]:
-            return x * nky * nkz + y * nkz + z
+            return x_index * nky * nkz + y_index * nkz + z_index
 
         vertices = np.stack(
             [
