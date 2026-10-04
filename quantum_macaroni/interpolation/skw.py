@@ -230,7 +230,7 @@ class SKWInterpolator:
             Tuple with generator vectors, squared lengths, and sufficiency flag.
 
         """
-        ranges = [range(-int(rmax[i]), int(rmax[i]) + 1) for i in range(3)]
+        ranges = [range(-int(rmax[axis]), int(rmax[axis]) + 1) for axis in range(3)]
         pts = np.array(list(itertools.product(*ranges)), dtype=int)
         r2 = np.einsum("ij,jk,ik->i", pts, self._recip_metric, pts)
 

@@ -31,6 +31,13 @@ classifiers = [
 [tool.setuptools.packages.find]
 include = ["quantum_macaroni*"]
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.ty.src]
+# User-supplied legacy parser reference; the maintained implementation is in parsers/.
+exclude = ["examples/outp/parser.py"]
+
 [dependency-groups]
 dev = [
     "prek>=0.3.8",

@@ -3,7 +3,7 @@
 This toolbox is a modular Boltzmann-transport workflow for post-processing the electronic-structure data.
 
 Current pipeline:
-- Parser plugins for electronic-structure outputs (default parser: Fleur out.xml).
+- Parser plugins for FLEUR out.xml and CRYSTAL outp electronic-structure outputs (default: FLEUR).
 - SKW interpolation of band energies.
 - Tetrahedron k-space integration mesh.
 - Transport-property calculators (default: Boltzmann transport calculator).
@@ -48,6 +48,87 @@ Main entry point is [main.py](main.py). Minimal run:
 python main.py examples/PbTe-nospin/out-nospin.xml
 ```
 
+CRYSTAL properties output is detected automatically:
+
+```bash
+python main.py examples/outp/mno2afm.outp
+```
+
+Run transport with an accompanying CRYSTAL DOS file:
+
+```bash
+python main.py system.outp --dos-file system.DOSS --output results.json
+# Equivalent positional form:
+python main.py system.outp system.DOSS --output results.json
+```
+
+The outp file supplies bands, lattice, and symmetry. By default, the DOSS file
+supplies the Fermi energy for band selection and chemical-potential shifts.
+Use `--fermi-source outp` to use the outp reference instead. The output includes
+the parsed DOS under `dos`, alongside transport results. Both files must describe
+the same system with the same energy convention; their spin-channel counts are
+checked. Changing the selected Fermi energy invalidates affected checkpoint stages.
+
+The properties file must include direct lattice vectors (`COORPRT`), Cartesian
+symmetry matrices (`SYMMOPS`), a k-point coordinate table, eigenvalues, and a numeric
+Fermi energy. Alpha and beta eigenvalues are kept as two spin channels, including
+AFM systems with zero total spin. Non-spin-polarized output is read as one channel;
+the transport calculator supplies its factor of two for spin degeneracy. The parser
+converts atomic-unit energies to eV and uses the printed Fermi energy as the reference
+for chemical-potential shifts. It accepts one properties dataset per file.
+
+E and T symmetry labels are handled as two- and three-state multiplets. When
+the file prints one energy per multiplet, the parser expands it into two or three
+band entries before interpolation. When each component is already printed,
+it retains those entries without multiplying them again. `NUMBER OF AO` resolves
+the encoding; otherwise it must be unambiguous from band counts across k-points.
+Ambiguous or inconsistent counts raise an error instead of guessing. This orbital
+multiplicity is separate from spin degeneracy.
+
+The same parser is available in Python as `CrystalOutpParser()` or through
+`calculate_spin_polarized_transport(path, parser="crystal-outp")`.
+
+The supplied AFM example prints a Fermi energy of -1 Hartree (about -27.21 eV)
+and reports `SPIN LOCKING: NO ENERGY GAP COMPUTED`. This value is preserved;
+choose chemical-potential shifts using your intended transport reference. Empty
+transport windows produce zero tensors. For singular conductivity tensors,
+Seebeck components in nonconducting directions are reported as zero by convention.
+
+CRYSTAL electronic DOS files can also be exported directly from the CLI:
+
+```bash
+python main.py system.DOSS --output dos.json
+```
+
+`DOSS.DAT` and `fort.25` inputs are also detected automatically. DOS-only runs
+default to `dos_results.json` and do not create transport checkpoints. The JSON
+contains energies relative to the Fermi energy in eV, absolute energies in eV,
+and DOS with shape `(spin, energy, projection)` in states/eV/cell.
+Use `--parser crystal-doss` or `--parser crystal-outp` to select a format explicitly.
+
+The DOS parser is also available in Python:
+
+```python
+from quantum_macaroni import CrystalDOSSParser
+
+dos = CrystalDOSSParser().parse("DOSS.DAT")  # Also accepts .DOSS and fort.25 files
+energy = dos.energies                       # E - E_F, in eV; shape (nenergy,)
+alpha = dos.dos[0]                          # states/eV/cell; shape (nenergy, nprojections)
+if dos.jspins == 2:
+    beta = dos.dos[1]
+absolute_energy = dos.absolute_energies
+```
+
+`dos.fermi_energy` stores the absolute Fermi energy in eV. Restricted DOSS files
+return one channel; polarized files return alpha then beta. Projection columns
+retain their original order, including any total-DOS column. The parser reverses
+CRYSTAL's beta plotting sign and converts states/Hartree to states/eV without an
+extra spin factor. It supports combined `fort.25` files containing both BAND and
+DOSS blocks and validates matching energy grids across spins and projections.
+The reader parses CRYSTAL's text records directly using Python and NumPy.
+Electronic DOS returns a `DOSResult`, separate from the band parser registry: DOSS files do not provide
+the band velocities required to calculate transport. Phonon DOS is unsupported.
+
 By default, the CLI writes restartable checkpoint state to `transport_state.npz`
 and resumes from it on later compatible runs.
 
@@ -83,9 +164,11 @@ For three-number form, the third value must be a positive integer (number of poi
 ## CLI Reference
 
 ```
-python main.py FILEPATH [options]
+python main.py FILEPATH [DOSS_FILEPATH] [options]
 
 Options:
+	--dos-file PATH, --doss PATH            accompanying CRYSTAL DOSS file for outp input
+	--fermi-source {doss,outp}              combined-run Fermi-energy reference (default: doss)
 	--temperature T [T ...]                one value or (start stop npoints)
 	--chemical-potential MU [MU ...]       one value or (start stop npoints), eV shift from E_F
 	--tau FLOAT                            relaxation time in seconds (default: 1e-14)
@@ -93,16 +176,17 @@ Options:
 	--lr-ratio INT                         SKW interpolator star-vector ratio (default: 20)
 	--band-window EMIN EMAX                band window relative to E_F in eV (default: -3 3)
 	--chunk-size INT                       chunk size for batched evaluation (default: 4096)
-	--parser {available_parsers}           parser plugin (default: fleur-outxml)
+	--parser {available_parsers,crystal-doss} input parser (default: automatic detection)
 	--calculator {available_calculators}   calculator plugin (default: boltzmann)
-	--output PATH                          output JSON file path (default: transport_results.json)
+	--output PATH                          JSON path (default: transport_results.json or dos_results.json)
 	--checkpoint PATH                      restartable .npz checkpoint (default: transport_state.npz)
 	--no-checkpoint                        disable checkpoint writing and resume
 	--no-resume                            ignore an existing checkpoint while writing a fresh one
 ```
 
 Available parser/calculator names come from the runtime registries in
-`parsers/__init__.py` and `calculators/__init__.py`.
+`parsers/__init__.py` and `calculators/__init__.py`. The CLI additionally provides
+the `crystal-doss` mode for DOS export.
 
 ## Checkpointing
 

@@ -101,9 +101,16 @@ def _onsager_to_transport(
 
     Returns:
         Tuple ``(sigma, seebeck, kappa)`` of 3x3 transport tensors.
+        For singular L0, the inverse is projected onto conducting directions;
+        Seebeck components in null directions are reported as zero by convention.
 
     """
-    l0_inv = np.linalg.inv(l0)
+    try:
+        l0_inv = np.linalg.inv(l0)
+    except np.linalg.LinAlgError:
+        # Gapped energy windows and inactive transport directions can make L0
+        # singular. Project onto the conducting directions, leaving null ones zero.
+        l0_inv = np.linalg.pinv(l0, hermitian=True)
     # The moment integrals use eV as their energy unit. Only one factor
     # of the elementary charge is needed for sigma and kappa, and no charge
     # factor is needed for Seebeck because eV per elementary charge is a volt.
@@ -685,6 +692,7 @@ def _transport_workflow_fingerprints(
     band_window: tuple[float, float] | None,
     energy_settings: dict[str, float],
     use_mu_scan: bool,
+    fermi_energy: float | None = None,
 ) -> dict[str, str]:
     """Return staged fingerprints for checkpoint compatibility."""
     resolved_path = Path(filepath).resolve()
@@ -704,6 +712,7 @@ def _transport_workflow_fingerprints(
             "input": input_fingerprint,
             "lr_ratio": lr_ratio,
             "band_window": band_window,
+            **({"fermi_energy": fermi_energy} if fermi_energy is not None else {}),
         }
     )
     tdos_fingerprint = stable_fingerprint(
@@ -1259,6 +1268,7 @@ def calculate_spin_polarized_transport(
     calculator: str = "boltzmann",
     checkpoint_path: str | Path | None = None,
     resume_checkpoint: bool = True,
+    fermi_energy: float | None = None,
 ) -> dict[str, Any] | dict[float | str, Any]:
     """Run full parser -> interpolation -> transport workflow.
 
@@ -1287,6 +1297,8 @@ def calculate_spin_polarized_transport(
         calculator: Registered calculator name.
         checkpoint_path: Optional ``.npz`` checkpoint path used to persist and resume workflow state.
         resume_checkpoint: Whether to resume from ``checkpoint_path`` when it already exists.
+        fermi_energy: Optional absolute Fermi energy in eV, overriding the band file's
+            reference for band selection and chemical-potential shifts.
 
     Returns:
         When *chemical_potential* is *None*: dictionary with tensors and metadata
@@ -1304,6 +1316,8 @@ def calculate_spin_polarized_transport(
         ValueError: If requested band window does not include any bands.
 
     """
+    if fermi_energy is not None and not np.isfinite(fermi_energy):
+        raise ValueError("fermi_energy must be finite")
     parser_obj = get_parser(parser) if isinstance(parser, str) else parser
     calculator_cls = get_calculator(calculator)
     filepath = str(filepath)
@@ -1332,6 +1346,7 @@ def calculate_spin_polarized_transport(
         "band_window": band_window,
         "chunk_size": chunk_size,
         "use_mu_scan": use_mu_scan,
+        "fermi_energy": fermi_energy,
         "energy_settings": energy_settings,
     }
     checkpoint_manager = CheckpointManager() if checkpoint_path is not None else None
@@ -1348,6 +1363,7 @@ def calculate_spin_polarized_transport(
             band_window,
             energy_settings,
             use_mu_scan,
+            fermi_energy=fermi_energy,
         )
         if checkpoint_manager is not None
         else {}
@@ -1377,7 +1393,7 @@ def calculate_spin_polarized_transport(
         mu_shifts,
     )
 
-    fermi = parsed.fermi_energy
+    fermi = parsed.fermi_energy if fermi_energy is None else float(fermi_energy)
     metadata = {
         "fermi_energy": fermi,
         "jspins": parsed.jspins,

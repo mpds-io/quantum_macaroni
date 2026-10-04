@@ -34,6 +34,45 @@ class ParserResult:
     symops: npt.NDArray[np.int_]
 
 
+@dataclass(slots=True)
+class DOSResult:
+    """Electronic density of states with a separate axis for each spin channel.
+
+    Attributes:
+        energies: Energy grid relative to the Fermi energy, shape ``(nenergy,)``, in eV.
+        dos: DOS values with shape ``(jspins, nenergy, nprojections)`` in states/eV/cell.
+            Projection order is preserved. CRYSTAL's plotted beta sign is reversed
+            so alpha and beta use the same physical sign convention. Restricted
+            values are retained without applying an additional spin factor.
+        fermi_energy: Absolute Fermi energy in eV.
+
+    """
+
+    energies: npt.NDArray[np.float64]
+    dos: npt.NDArray[np.float64]
+    fermi_energy: float
+
+    @property
+    def jspins(self) -> int:
+        """Return the number of spin channels (one or two)."""
+        return self.dos.shape[0]
+
+    @property
+    def nenergy(self) -> int:
+        """Return the number of energy sampling points."""
+        return len(self.energies)
+
+    @property
+    def nprojections(self) -> int:
+        """Return the number of DOS columns per spin channel."""
+        return self.dos.shape[2]
+
+    @property
+    def absolute_energies(self) -> npt.NDArray[np.float64]:
+        """Return the energy grid before alignment to the Fermi energy, in eV."""
+        return self.energies + self.fermi_energy
+
+
 class ElectronicStructureParser(Protocol):
     """Protocol implemented by parser plugins."""
 
